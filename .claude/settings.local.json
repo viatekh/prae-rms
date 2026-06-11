@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(python3 -)",
+      "Bash(npx tsc *)",
+      "Bash(npx vite *)",
+      "Bash(curl -s http://localhost:5174)",
+      "WebFetch(domain:gdtf-share.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(ls /Users/tekh/prae-plot/)",
+      "Bash(cat)",
+      "Bash(python3 /tmp/app_patch.py)"
+    ]
+  }
+}
