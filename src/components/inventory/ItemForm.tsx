@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import type { Item, ItemComponent } from '../../types'
 import { Input, Textarea } from '../shared/Input'
@@ -21,7 +21,7 @@ interface ItemFormProps {
 export function ItemForm({ initial, onSave, onCancel, existingIds = [], existingItems = [] }: ItemFormProps) {
   const { data: categories = [] } = useCategories()
   const [name, setName] = useState(initial?.name || '')
-  const [itemId, setItemId] = useState(initial?.item_id || '')
+  const [manualItemId, setManualItemId] = useState(initial?.item_id || '')
   const [categoryId, setCategoryId] = useState(initial?.category_id || '')
   const [serialNumber, setSerialNumber] = useState(initial?.serial_number || '')
   const [dayPrice, setDayPrice] = useState(String(initial?.day_price ?? ''))
@@ -84,15 +84,16 @@ export function ItemForm({ initial, onSave, onCancel, existingIds = [], existing
     setShowSuggestions(false)
   }
 
-  // Auto-generate ID from name
-  useEffect(() => {
-    if (idManuallyEdited || initial) return
-    if (!name.trim()) { setItemId(''); return }
+  // The ID is derived from the name until the user types their own — derived
+  // during render rather than mirrored into state by an effect.
+  const itemId = useMemo(() => {
+    if (idManuallyEdited || initial) return manualItemId
+    if (!name.trim()) return ''
     const code = generateItemCode(name)
     let counter = 1
     while (existingIds.includes(formatItemId(code, counter))) counter++
-    setItemId(formatItemId(code, counter))
-  }, [name, idManuallyEdited, initial, existingIds])
+    return formatItemId(code, counter)
+  }, [name, manualItemId, idManuallyEdited, initial, existingIds])
 
   // Auto-suggest week / month from day price
   // Standard AV rates: week ≈ 3× day, month ≈ 10× day
@@ -170,7 +171,7 @@ export function ItemForm({ initial, onSave, onCancel, existingIds = [], existing
         <Input
           label="Item ID *"
           value={itemId}
-          onChange={e => { setItemId(e.target.value.toUpperCase()); setIdManuallyEdited(true) }}
+          onChange={e => { setManualItemId(e.target.value.toUpperCase()); setIdManuallyEdited(true) }}
           required
           className="font-mono"
         />

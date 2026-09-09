@@ -1,12 +1,15 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Plus, Shield, User, Trash2, AlertTriangle, KeyRound } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { createAuthUser, sendPasswordReset } from '../lib/auth'
-import { useAuth, type Profile } from '../hooks/useAuth'
+import { useAuth, type Profile } from '../lib/auth-context'
+import { useQueryClient } from '@tanstack/react-query'
+import { useProfiles } from '../hooks/useProfiles'
+import { errorMessage } from '../lib/errors'
 import { Button } from '../components/shared/Button'
 import { Input } from '../components/shared/Input'
 import { Modal } from '../components/shared/Modal'
-import { useToast } from '../components/shared/Toast'
+import { useToast } from '../lib/toast-context'
 
 function RoleBadge({ role }: { role: 'admin' | 'staff' }) {
   return (
@@ -20,36 +23,34 @@ function RoleBadge({ role }: { role: 'admin' | 'staff' }) {
 }
 
 export function UsersPage() {
-  const { profile: myProfile, isAdmin } = useAuth()
+  const { profile: myProfile } = useAuth()
   const toast = useToast()
-  const [profiles, setProfiles] = useState<Profile[]>([])
-  const [loading, setLoading] = useState(true)
+  const qc = useQueryClient()
+  const { data: profiles = [], isLoading: loading } = useProfiles()
   const [showCreate, setShowCreate] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<Profile | null>(null)
+  const [busyId, setBusyId] = useState<string | null>(null)
 
-  const load = async () => {
-    setLoading(true)
-    const { data } = await supabase.from('profiles').select('*').order('created_at')
-    setProfiles(data || [])
-    setLoading(false)
-  }
-
-  useEffect(() => { load() }, [])
+  const reload = () => qc.invalidateQueries({ queryKey: ['profiles'] })
 
   const handleRoleChange = async (profile: Profile, role: 'admin' | 'staff') => {
+    setBusyId(profile.id)
     const { error } = await supabase.from('profiles').update({ role }).eq('id', profile.id)
+    setBusyId(null)
     if (error) { toast(error.message, 'error'); return }
     toast(`${profile.email} is now ${role}`)
-    load()
+    reload()
   }
 
   const handleDelete = async (profile: Profile) => {
-    // Deletes the profile row; the auth.users row will cascade via the trigger
+    // Deletes the profile row; the auth.users row cascades via the DB trigger.
+    setBusyId(profile.id)
     const { error } = await supabase.from('profiles').delete().eq('id', profile.id)
+    setBusyId(null)
     if (error) { toast(error.message, 'error'); return }
     toast('User removed')
     setConfirmDelete(null)
-    load()
+    reload()
   }
 
   const handlePasswordReset = async (profile: Profile) => {
@@ -58,19 +59,8 @@ export function UsersPage() {
     toast(`Password reset email sent to ${profile.email}`)
   }
 
-  if (!isAdmin) {
-    return (
-      <div className="p-6">
-        <div className="flex items-center gap-2 text-gray-500">
-          <Shield size={18} />
-          <p className="text-sm">Only admins can manage users.</p>
-        </div>
-      </div>
-    )
-  }
-
   return (
-    <div className="p-6 max-w-3xl">
+    <div className="p-3 md:p-6 max-w-3xl">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Users</h1>
@@ -83,7 +73,9 @@ export function UsersPage() {
         {loading ? (
           <p className="text-sm text-gray-500 p-4">Loading…</p>
         ) : profiles.map((p, idx) => (
-          <div key={p.id} className={`flex items-center gap-4 px-4 py-3 ${idx > 0 ? 'border-t border-gray-100' : ''} ${p.id === myProfile?.id ? 'bg-blue-50' : 'hover:bg-gray-50'}`}>
+          <div key={p.id} className={`flex items-center gap-4 px-4 py-3 ${idx > 0 ? 'border-t border-gray-100' : ''} ${
+            p.id === myProfile?.id ? 'bg-blue-50' : 'hover:bg-gray-50'
+          } ${busyId === p.id ? 'opacity-60 pointer-events-none' : ''}`}>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span className="font-medium text-sm text-gray-900">{p.full_name || p.email}</span>
@@ -119,7 +111,7 @@ export function UsersPage() {
       </div>
 
       {/* Create user modal */}
-      <CreateUserModal open={showCreate} onClose={() => setShowCreate(false)} onCreated={() => { load(); setShowCreate(false) }} />
+      <CreateUserModal open={showCreate} onClose={() => setShowCreate(false)} onCreated={() => { reload(); setShowCreate(false) }} />
 
       {/* Confirm delete */}
       <Modal open={!!confirmDelete} onClose={() => setConfirmDelete(null)} title="Remove user" size="sm">
@@ -132,7 +124,8 @@ export function UsersPage() {
           </div>
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setConfirmDelete(null)}>Cancel</Button>
-            <Button variant="danger" onClick={() => confirmDelete && handleDelete(confirmDelete)}>Remove</Button>
+            <Button variant="danger" disabled={!!busyId}
+              onClick={() => confirmDelete && handleDelete(confirmDelete)}>Remove</Button>
           </div>
         </div>
       </Modal>
@@ -168,8 +161,8 @@ function CreateUserModal({ open, onClose, onCreated }: { open: boolean; onClose:
       toast(`${email} added`)
       reset()
       onCreated()
-    } catch (e: any) {
-      setError(e?.message || 'Unknown error')
+    } catch (e) {
+      setError(errorMessage(e, 'Could not create the user'))
     } finally {
       setLoading(false)
     }
@@ -182,8 +175,8 @@ function CreateUserModal({ open, onClose, onCreated }: { open: boolean; onClose:
         <Input label="Full name" value={fullName} onChange={e => setFullName(e.target.value)} placeholder="Optional" />
         <Input label="Initial password *" type="password" value={password} onChange={e => setPassword(e.target.value)} required
           placeholder="Min 6 characters" minLength={6} autoComplete="new-password" />
-        <div>
-          <label className="text-sm font-medium text-gray-700 block mb-1">Role</label>
+        <fieldset>
+          <legend className="text-sm font-medium text-gray-700 mb-1">Role</legend>
           <div className="flex gap-3">
             {(['staff', 'admin'] as const).map(r => (
               <label key={r} className="flex items-center gap-2 cursor-pointer">
@@ -192,7 +185,7 @@ function CreateUserModal({ open, onClose, onCreated }: { open: boolean; onClose:
               </label>
             ))}
           </div>
-        </div>
+        </fieldset>
         {error && <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
         <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
           <Button type="button" variant="secondary" onClick={() => { onClose(); reset() }}>Cancel</Button>

@@ -137,8 +137,10 @@ export function parseCSV(text: string): ParsedImport {
     }
 
     mappedHeaders.forEach((mapped, j) => {
-      if (mapped in row && mapped !== '_raw') {
-        (row as any)[mapped] = cells[j] || ''
+      if (mapped !== '_raw' && mapped in row) {
+        // Every mapped key other than `_raw` addresses a string field of CSVRow.
+        const key = mapped as Exclude<keyof CSVRow, '_raw'>
+        row[key] = cells[j] || ''
       }
     })
 

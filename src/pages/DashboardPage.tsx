@@ -4,34 +4,19 @@ import { format, parseISO, isToday, isTomorrow, startOfMonth, endOfMonth } from 
 import { Truck, TruckIcon, AlertCircle, TrendingUp, Package, ChevronRight } from 'lucide-react'
 import { useProjects } from '../hooks/useProjects'
 import { StatusBadge } from '../components/shared/Badge'
-import { formatCurrency } from '../lib/utils'
-import { calcProjectTotals } from '../lib/utils'
-import { useQuery } from '@tanstack/react-query'
-import { supabase } from '../lib/supabase'
-
-function useProjectsWithLines() {
-  return useQuery({
-    queryKey: ['projects-dashboard'],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('projects')
-        .select('*, client:clients(name), line_items:project_line_items(*)')
-        .in('status', ['confirmed', 'sent', 'invoiced', 'completed'])
-        .order('event_date', { ascending: true, nullsFirst: false })
-      if (error) throw error
-      return data as any[]
-    },
-    staleTime: 30_000,
-  })
-}
+import { formatCurrency, calcProjectTotals } from '../lib/utils'
+import { useProjectRevenue } from '../hooks/useRevenue'
+import type { Project } from '../types'
 
 export function DashboardPage() {
   const { data: allProjects = [] } = useProjects()
-  const { data: richProjects = [] } = useProjectsWithLines()
+  const { data: richProjects = [] } = useProjectRevenue()
 
-  const today = new Date()
-  const monthStart = startOfMonth(today)
-  const monthEnd = endOfMonth(today)
+  // Anchored once per mount so the memos below have stable dependencies.
+  const { today, monthStart, monthEnd } = useMemo(() => {
+    const now = new Date()
+    return { today: now, monthStart: startOfMonth(now), monthEnd: endOfMonth(now) }
+  }, [])
 
   const departuresToday = useMemo(() =>
     allProjects.filter(p => p.delivery_date && isToday(parseISO(p.delivery_date)) && ['confirmed', 'sent', 'invoiced'].includes(p.status)),
@@ -54,7 +39,7 @@ export function DashboardPage() {
       if (!p.collection_date || p.check_in_at || p.status === 'completed') return false
       return new Date(p.collection_date) < today && ['confirmed', 'sent', 'invoiced'].includes(p.status)
     }),
-    [allProjects])
+    [allProjects, today])
 
   const revenueThisMonth = useMemo(() => {
     return richProjects
@@ -64,11 +49,7 @@ export function DashboardPage() {
         const date = parseISO(d)
         return date >= monthStart && date <= monthEnd && ['confirmed', 'invoiced', 'completed'].includes(p.status)
       })
-      .reduce((sum, p) => {
-        const lines = p.line_items || []
-        const { subtotal } = calcProjectTotals(lines, p.overall_discount_pct ?? 0)
-        return sum + subtotal
-      }, 0)
+      .reduce((sum, p) => sum + calcProjectTotals(p.line_items ?? [], p.overall_discount_pct ?? 0).subtotal, 0)
   }, [richProjects, monthStart, monthEnd])
 
   const pendingQuotes = useMemo(() =>
@@ -217,7 +198,11 @@ function Section({ title, icon, children, titleClass }: {
   )
 }
 
-function ProjectRow({ project, detail, detailClass }: { project: any; detail?: string; detailClass?: string }) {
+function ProjectRow({ project, detail, detailClass }: {
+  project: Pick<Project, 'id' | 'name' | 'project_number' | 'status' | 'location'> & { client?: { name: string } | null }
+  detail?: string
+  detailClass?: string
+}) {
   return (
     <Link to={`/projects/${project.id}`}
       className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 border-b border-gray-50 last:border-0">

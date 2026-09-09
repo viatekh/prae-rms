@@ -1,73 +1,80 @@
-# React + TypeScript + Vite
+# PRAE — Rental Management
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Equipment rental management for AV / production hire: inventory, quotes,
+kit lists, availability, scheduling and PDF paperwork.
 
-Currently, two official plugins are available:
+Built with React 19, TypeScript, Vite, Tailwind v4, TanStack Query and Supabase.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Getting started
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+cp .env.local.example .env.local   # then fill in your Supabase project details
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+`.env.local` needs:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
 ```
+VITE_SUPABASE_URL=https://<project>.supabase.co
+VITE_SUPABASE_ANON_KEY=<anon key>
+```
+
+### Database
+
+Run `supabase/schema.sql` in the Supabase SQL editor to create the tables, then
+`supabase/setup.sql` for seed data. `supabase/migrate.sql` holds incremental
+changes and `supabase/drop_all.sql` tears everything down.
+
+For new users to sign in immediately, disable **Enable email confirmations**
+under Authentication → Settings in the Supabase dashboard.
+
+## Scripts
+
+| Command | Does |
+| --- | --- |
+| `npm run dev` | Dev server with HMR |
+| `npm run build` | Type-check (`tsc -b`) then production build |
+| `npm run lint` | ESLint over `src/` |
+| `npm run preview` | Serve the production build locally |
+
+## How it fits together
+
+```
+src/
+  pages/        one file per route
+  components/
+    shared/     Button, Input, Select, Modal, Toast, Layout, guards
+    inventory/  item form, CSV import, category manager
+  hooks/        one module per resource; all data access goes through TanStack Query
+  lib/          supabase client, auth + toast contexts, PDF documents, CSV, maths
+  types/        database row types
+```
+
+Key conventions:
+
+- **Data access lives in `hooks/`.** Pages don't call `supabase` directly; if you
+  need a new query, add it to the relevant hook module so caching and
+  invalidation stay in one place.
+- **Auth is a single context.** `AuthProvider` holds the only `onAuthStateChange`
+  subscription; read it with `useAuth()` from `lib/auth-context`.
+- **Mutations strip joined relations.** Supabase rows come back with `client`,
+  `line_items`, `category` etc. attached; those must never be sent back in an
+  `update`, so the update hooks destructure them off.
+- **List views keep filters in the URL** (`?q=`, `?status=`, `?tab=`, `?view=`)
+  so a view is shareable and survives navigating into a record and back.
+
+### Availability
+
+`useItemTypeAvailability` groups inventory by item *name* to get a unit count per
+type, then subtracts quantities committed to other projects whose dates overlap.
+Only `sent`, `confirmed` and `invoiced` projects hold stock — drafts don't.
+Comparisons are day-precision, since project dates are stored as both plain
+dates and full timestamps.
+
+### Kit list editing
+
+The kit list on a project is edited in local state and saved explicitly. While
+edits are pending the page shows an "Unsaved changes" badge and blocks
+navigation. The project *details* panel to its left autosaves on a debounce and
+flushes any pending write when it unmounts.

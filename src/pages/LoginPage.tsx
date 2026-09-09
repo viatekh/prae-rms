@@ -1,32 +1,49 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../hooks/useAuth'
+import { useNavigate, useLocation, Navigate } from 'react-router-dom'
+import { useAuth } from '../lib/auth-context'
 import { Button } from '../components/shared/Button'
 import { Input } from '../components/shared/Input'
 
+interface LocationState { from?: { pathname: string } }
+
 export function LoginPage() {
-  const { signIn } = useAuth()
+  const { signIn, session, loading } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+
+  // Wherever the auth guard bounced them from, or the dashboard.
+  const redirectTo = (location.state as LocationState | null)?.from?.pathname ?? '/'
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setError('')
-    setLoading(true)
+    setSubmitting(true)
     const { error } = await signIn(email, password)
-    setLoading(false)
+    setSubmitting(false)
     if (error) {
       setError(error.message === 'Invalid login credentials'
         ? 'Incorrect email or password'
         : error.message)
-    } else {
-      navigate('/projects')
+      return
     }
+    navigate(redirectTo, { replace: true })
   }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <p className="text-sm text-gray-400">Loading…</p>
+      </div>
+    )
+  }
+
+  // Already signed in — no reason to show the form again.
+  if (session) return <Navigate to={redirectTo} replace />
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
@@ -45,6 +62,7 @@ export function LoginPage() {
               value={email}
               onChange={e => setEmail(e.target.value)}
               autoComplete="email"
+              autoFocus
               required
             />
             <Input
@@ -56,10 +74,10 @@ export function LoginPage() {
               required
             />
             {error && (
-              <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{error}</p>
+              <p role="alert" className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{error}</p>
             )}
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? 'Signing in…' : 'Sign in'}
+            <Button type="submit" className="w-full" disabled={submitting || !email || !password}>
+              {submitting ? 'Signing in…' : 'Sign in'}
             </Button>
           </form>
         </div>

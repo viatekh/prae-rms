@@ -1,21 +1,8 @@
 import { pdf, Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { DocumentProps } from '@react-pdf/renderer'
-import type { Project, Settings } from '../types'
+import type { Project, Settings, LineItemDraft } from '../types'
 import { calcLineTotal, calcProjectTotals } from './utils'
 import { format, parseISO } from 'date-fns'
-
-type LineItemDraft = {
-  description: string
-  line_type: string
-  category: string
-  quantity: number
-  days: number
-  unit_price: number
-  discount_pct: number
-  is_component: boolean
-  item_id: string | null
-  package_id: string | null
-}
 
 const styles = StyleSheet.create({
   page: { fontFamily: 'Helvetica', fontSize: 9, padding: 40, color: '#1a1a1a' },
@@ -348,7 +335,7 @@ async function downloadPDF(element: React.ReactElement<DocumentProps>, filename:
   URL.revokeObjectURL(url)
 }
 
-export async function generateQuotePDF(project: Project, lines: any[], settings: Settings | undefined) {
+export async function generateQuotePDF(project: Project, lines: LineItemDraft[], settings: Settings | undefined) {
   await downloadPDF(
     <QuoteDocument project={project} lines={lines} settings={settings} /> as React.ReactElement<DocumentProps>,
     `${project.project_number}-quote.pdf`
@@ -438,14 +425,14 @@ function DeliveryDocketDocument({ project, lines, settings }: { project: Project
   )
 }
 
-export async function generateDeliveryDocketPDF(project: Project, lines: any[], settings: Settings | undefined) {
+export async function generateDeliveryDocketPDF(project: Project, lines: LineItemDraft[], settings: Settings | undefined) {
   await downloadPDF(
     <DeliveryDocketDocument project={project} lines={lines} settings={settings} /> as React.ReactElement<DocumentProps>,
     `${project.project_number}-delivery-docket.pdf`
   )
 }
 
-export async function generatePickingListPDF(project: Project, lines: any[], settings: Settings | undefined, items: { id: string; item_id: string }[] = []) {
+export async function generatePickingListPDF(project: Project, lines: LineItemDraft[], settings: Settings | undefined, items: { id: string; item_id: string }[] = []) {
   const itemCodeMap = new Map(items.map(i => [i.id, i.item_id]))
   await downloadPDF(
     <PickingListDocument project={project} lines={lines} settings={settings} itemCodeMap={itemCodeMap} /> as React.ReactElement<DocumentProps>,

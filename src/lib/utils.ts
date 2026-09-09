@@ -1,21 +1,26 @@
 import { type ClassValue, clsx } from 'clsx'
+import type { PricedLine } from '../types'
 import { twMerge } from 'tailwind-merge'
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+const GBP = new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' })
+
 export function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(amount)
+  // A missing or malformed price should read as £0.00, never "£NaN".
+  return GBP.format(Number.isFinite(amount) ? amount : 0)
 }
 
 export function calcLineTotal(unitPrice: number, quantity: number, days: number, discountPct: number): number {
-  const gross = unitPrice * quantity * days
-  return gross * (1 - discountPct / 100)
+  const gross = (unitPrice || 0) * (quantity || 0) * (days || 0)
+  const total = gross * (1 - (discountPct || 0) / 100)
+  return Number.isFinite(total) ? total : 0
 }
 
 export function calcProjectTotals(
-  lineItems: { unit_price: number; quantity: number; days: number; discount_pct: number; is_component: boolean }[],
+  lineItems: PricedLine[],
   overallDiscountPct = 0
 ) {
   const linesSubtotal = lineItems

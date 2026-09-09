@@ -1,6 +1,8 @@
-import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { ArrowLeft, Plus, Trash2, Copy, FileText, ClipboardList, Send, LogIn, LogOut, AlertCircle, MoreVertical, Users, MessageSquare, Truck } from 'lucide-react'
+import { useUnsavedChanges } from '../hooks/useUnsavedChanges'
+import { errorMessage } from '../lib/errors'
 import { format, addDays, isPast, parseISO } from 'date-fns'
 import { useProject, useUpdateProject, useSaveLineItems, useDeleteProject } from '../hooks/useProjects'
 import { useProjectLogs, useAddProjectLog, useDeleteProjectLog } from '../hooks/useProjectLogs'
@@ -10,15 +12,16 @@ import { useItems } from '../hooks/useItems'
 import { usePackages } from '../hooks/usePackages'
 import { useClients, useCreateClient } from '../hooks/useClients'
 import { useSettings } from '../hooks/useSettings'
-import type { Project, ProjectLineItem, ProjectStatus, Item, Package } from '../types'
+import type { Project, ProjectLineItem, ProjectStatus, Item, Package, Client } from '../types'
 import { Button } from '../components/shared/Button'
 import { Input, Textarea } from '../components/shared/Input'
 
 import { Modal } from '../components/shared/Modal'
 import { StatusBadge, SubhireBadge } from '../components/shared/Badge'
 import { formatCurrency, calcLineTotal, calcProjectTotals } from '../lib/utils'
-import { generateQuotePDF, generatePickingListPDF, generateDeliveryDocketPDF } from '../lib/pdf'
-import { useToast } from '../components/shared/Toast'
+import { generateQuotePDF, generatePickingListPDF, generateDeliveryDocketPDF } from '../lib/pdf-lazy'
+import { useToast } from '../lib/toast-context'
+import { Select } from '../components/shared/Select'
 
 const STATUSES: ProjectStatus[] = ['draft', 'sent', 'confirmed', 'invoiced', 'completed']
 
@@ -34,14 +37,17 @@ type LineItemDraft = Omit<ProjectLineItem, 'id' | 'item' | 'package' | 'children
 
 // ─── Left panel: project details + dates + notes ─────────────────────────────
 
-const ProjectDetailsPanel = forwardRef<{ save: () => void }, {
+const AUTOSAVE_DELAY_MS = 1200
+
+function ProjectDetailsPanel({ project, clients, onStatusChange, onSave, onRefreshClients }: {
   project: Project
-  clients: import('../types').Client[]
+  clients: Client[]
   onStatusChange: (s: ProjectStatus) => void
   onSave: (updates: Partial<Project>) => Promise<void>
   onRefreshClients: () => void
-}>(function ProjectDetailsPanel({ project, clients, onStatusChange, onSave, onRefreshClients }, ref) {
+}) {
   const createClient = useCreateClient()
+  const toast = useToast()
   const [showNewClient, setShowNewClient] = useState(false)
   const [newClientName, setNewClientName] = useState('')
   const [newClientCompany, setNewClientCompany] = useState('')
@@ -72,49 +78,68 @@ const ProjectDetailsPanel = forwardRef<{ save: () => void }, {
   )
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const initialized = useRef(false)
 
-  const set = (field: string, value: any) => {
+  type FormField = keyof typeof form
+  const set = (field: FormField, value: string) => {
     setForm(f => ({ ...f, [field]: value }))
   }
 
-  const handleSave = async () => {
-    await onSave({
-      client_id: form.client_id || null,
-      location: form.location || null,
-      delivery_address: form.delivery_address || null,
-      event_date: form.event_date || null,
-      delivery_date: form.delivery_date || null,
-      collection_date: form.collection_date || null,
-      client_collects: form.delivery_mode === 'client_collects',
-      client_returns: form.collection_mode === 'client_returns',
-      delivery_mode: form.delivery_mode,
-      collection_mode: form.collection_mode,
-      delivery_notes: form.delivery_notes || null,
-      collection_notes: form.collection_notes || null,
-      expiry_date: form.expiry_date || null,
-      po_number: form.po_number || null,
-      overall_discount_pct: parseFloat(form.overall_discount_pct) || 0,
-      damage_notes: form.damage_notes || null,
-      notes: form.notes || null,
-      client_notes: form.client_notes || null,
-    })
-    setSaveState('saved')
-    setTimeout(() => setSaveState('idle'), 2000)
-  }
+  const toUpdates = useCallback((f: typeof form): Partial<Project> => ({
+    client_id: f.client_id || null,
+    location: f.location || null,
+    delivery_address: f.delivery_address || null,
+    event_date: f.event_date || null,
+    delivery_date: f.delivery_date || null,
+    collection_date: f.collection_date || null,
+    client_collects: f.delivery_mode === 'client_collects',
+    client_returns: f.collection_mode === 'client_returns',
+    delivery_mode: f.delivery_mode,
+    collection_mode: f.collection_mode,
+    delivery_notes: f.delivery_notes || null,
+    collection_notes: f.collection_notes || null,
+    expiry_date: f.expiry_date || null,
+    po_number: f.po_number || null,
+    overall_discount_pct: parseFloat(f.overall_discount_pct) || 0,
+    damage_notes: f.damage_notes || null,
+    notes: f.notes || null,
+    client_notes: f.client_notes || null,
+  }), [])
 
-  useImperativeHandle(ref, () => ({ save: handleSave }))
+  // The snapshot last written to the server. Dirtiness is derived from it rather
+  // than tracked in a ref, so the render never reads mutable state.
+  const [savedSnapshot, setSavedSnapshot] = useState(form)
+  const isDirty = (Object.keys(form) as (keyof typeof form)[])
+    .some(k => form[k] !== savedSnapshot[k])
 
+  // Latest values for the unmount flush, synced in an effect (never during render).
+  const latest = useRef({ form, onSave, isDirty })
+  useEffect(() => { latest.current = { form, onSave, isDirty } })
+
+  const flush = useCallback(async () => {
+    const { form: f, onSave: save, isDirty: dirty } = latest.current
+    if (!dirty) return
+    await save(toUpdates(f))
+    setSavedSnapshot(f)
+  }, [toUpdates])
+
+  // Debounced autosave: edits are written AUTOSAVE_DELAY_MS after typing stops.
   useEffect(() => {
-    if (!initialized.current) { initialized.current = true; return }
+    if (!isDirty) return
     if (saveTimer.current) clearTimeout(saveTimer.current)
-    setSaveState('idle')
-    saveTimer.current = setTimeout(async () => {
+    saveTimer.current = setTimeout(() => {
       setSaveState('saving')
-      try { await handleSave() } catch {}
-    }, 1200)
+      flush()
+        .then(() => {
+          setSaveState('saved')
+          setTimeout(() => setSaveState('idle'), 2000)
+        })
+        .catch(() => setSaveState('idle'))
+    }, AUTOSAVE_DELAY_MS)
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current) }
-  }, [form])
+  }, [form, isDirty, flush])
+
+  // Leaving the panel (mobile tab switch, route change) must not drop a pending edit.
+  useEffect(() => () => { void flush() }, [flush])
 
   const handleEventDateChange = (val: string) => {
     set('event_date', val)
@@ -133,61 +158,71 @@ const ProjectDetailsPanel = forwardRef<{ save: () => void }, {
           <h2 className="text-sm font-semibold text-gray-700">Project details</h2>
           {saveState === 'saving' && <span className="text-xs text-gray-400">Saving…</span>}
           {saveState === 'saved'  && <span className="text-xs text-green-600">Saved ✓</span>}
+          {saveState === 'idle' && isDirty && (
+            <span className="text-xs text-amber-600">Unsaved…</span>
+          )}
         </div>
 
-        <div>
-          <label className="text-xs font-medium text-gray-500 block mb-1">Status</label>
-          <select
-            className={`w-full px-2 py-1.5 text-sm border rounded-lg font-medium ${STATUS_SELECT_STYLES[project.status] || 'border-gray-300 bg-white text-gray-700'}`}
-            value={project.status}
-            onChange={e => onStatusChange(e.target.value as ProjectStatus)}
-          >
-            {STATUSES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-          </select>
-        </div>
+        <Select
+          label="Status"
+          className={`font-medium ${STATUS_SELECT_STYLES[project.status] || ''}`}
+          value={project.status}
+          onChange={e => onStatusChange(e.target.value as ProjectStatus)}
+        >
+          {STATUSES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+        </Select>
 
         <div>
-          <label className="text-xs font-medium text-gray-500 block mb-1">Client</label>
-          <div className="flex gap-1.5">
-            <select
-              className="flex-1 px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white"
+          <div className="flex gap-1.5 items-end">
+            <Select
+              label="Client"
+              className="flex-1"
               value={form.client_id}
               onChange={e => {
-                set('client_id', e.target.value)
                 const client = clients.find(c => c.id === e.target.value)
-                if (client?.default_discount_pct) {
-                  set('overall_discount_pct', String(client.default_discount_pct))
-                }
+                setForm(f => ({
+                  ...f,
+                  client_id: e.target.value,
+                  overall_discount_pct: client?.default_discount_pct
+                    ? String(client.default_discount_pct)
+                    : f.overall_discount_pct,
+                }))
               }}
             >
               <option value="">No client</option>
               {clients.map(c => <option key={c.id} value={c.id}>{c.name}{c.company ? ` (${c.company})` : ''}</option>)}
-            </select>
-            <button
-              type="button"
-              onClick={() => setShowNewClient(true)}
-              className="px-2 py-1.5 text-xs text-gray-500 border border-gray-300 rounded-lg hover:bg-gray-50 shrink-0"
-              title="Add new client"
-            >+ New</button>
+            </Select>
+            <Button type="button" variant="secondary" size="sm" className="shrink-0 h-[38px]"
+              onClick={() => setShowNewClient(true)} title="Add new client">
+              <Plus size={14} />New
+            </Button>
           </div>
           {showNewClient && (
             <div className="mt-2 p-3 bg-gray-50 border border-gray-200 rounded-lg space-y-2">
               <p className="text-xs font-medium text-gray-600">New client</p>
-              <input className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded" placeholder="Name *" value={newClientName} onChange={e => setNewClientName(e.target.value)} />
-              <input className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded" placeholder="Company" value={newClientCompany} onChange={e => setNewClientCompany(e.target.value)} />
-              <input className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded" placeholder="Email" type="email" value={newClientEmail} onChange={e => setNewClientEmail(e.target.value)} />
+              <Input label="Name *" value={newClientName} onChange={e => setNewClientName(e.target.value)} />
+              <Input label="Company" value={newClientCompany} onChange={e => setNewClientCompany(e.target.value)} />
+              <Input label="Email" type="email" value={newClientEmail} onChange={e => setNewClientEmail(e.target.value)} />
               <div className="flex gap-2 justify-end">
-                <button type="button" className="text-xs text-gray-500 hover:text-gray-700" onClick={() => setShowNewClient(false)}>Cancel</button>
-                <button type="button" className="text-xs bg-gray-900 text-white px-3 py-1 rounded hover:bg-gray-700"
+                <Button type="button" variant="ghost" size="sm" onClick={() => setShowNewClient(false)}>Cancel</Button>
+                <Button type="button" size="sm" disabled={!newClientName.trim() || createClient.isPending}
                   onClick={async () => {
                     if (!newClientName.trim()) return
-                    const client = await createClient.mutateAsync({ name: newClientName.trim(), company: newClientCompany || null, email: newClientEmail || null, phone: null, address: null, billing_address: null, credit_terms: null, notes: null })
-                    set('client_id', client.id)
-                    onRefreshClients()
-                    setShowNewClient(false)
-                    setNewClientName(''); setNewClientCompany(''); setNewClientEmail('')
+                    try {
+                      const client = await createClient.mutateAsync({
+                        name: newClientName.trim(), company: newClientCompany || null,
+                        email: newClientEmail || null, phone: null, address: null,
+                        billing_address: null, credit_terms: null, notes: null,
+                      })
+                      set('client_id', client.id)
+                      onRefreshClients()
+                      setShowNewClient(false)
+                      setNewClientName(''); setNewClientCompany(''); setNewClientEmail('')
+                    } catch (e) {
+                      toast(errorMessage(e, 'Failed to add client'), 'error')
+                    }
                   }}
-                >Save</button>
+                >{createClient.isPending ? 'Saving…' : 'Save'}</Button>
               </div>
             </div>
           )}
@@ -350,7 +385,7 @@ const ProjectDetailsPanel = forwardRef<{ save: () => void }, {
 
     </div>
   )
-})
+}
 
 export function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -366,7 +401,6 @@ export function ProjectDetailPage() {
   const deleteProject = useDeleteProject()
   const toast = useToast()
 
-  const panelRef = useRef<{ save: () => void }>(null)
   const [showAddItem, setShowAddItem] = useState(false)
   const [showAddService, setShowAddService] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -374,9 +408,10 @@ export function ProjectDetailPage() {
   const [mobileTab, setMobileTab] = useState<'details' | 'kit'>('kit')
   const [showOverflow, setShowOverflow] = useState(false)
 
-  // Local editable state for line items
+  // Local editable copy of the kit list; null means "no local edits yet".
   const [localLines, setLocalLines] = useState<LineItemDraft[] | null>(null)
-  const lines: LineItemDraft[] = localLines ?? (project?.line_items?.map(l => ({
+
+  const savedLines = useMemo<LineItemDraft[]>(() => (project?.line_items ?? []).map(l => ({
     project_id: l.project_id,
     item_id: l.item_id,
     package_id: l.package_id,
@@ -390,9 +425,13 @@ export function ProjectDetailPage() {
     sort_order: l.sort_order,
     is_component: l.is_component,
     parent_line_id: l.parent_line_id,
-  })) ?? [])
+  })), [project?.line_items])
 
-  const updateLine = (idx: number, field: keyof LineItemDraft, value: any) => {
+  const lines: LineItemDraft[] = localLines ?? savedLines
+  const hasUnsavedLines = localLines !== null
+  const unsaved = useUnsavedChanges(hasUnsavedLines)
+
+  const updateLine = <K extends keyof LineItemDraft>(idx: number, field: K, value: LineItemDraft[K]) => {
     setLocalLines(prev => {
       const base = prev ?? lines
       return base.map((l, i) => i === idx ? { ...l, [field]: value } : l)
@@ -562,8 +601,8 @@ export function ProjectDetailPage() {
       await saveLineItems.mutateAsync({ projectId: id!, lineItems: localLines })
       setLocalLines(null)
       toast('Kit list saved')
-    } catch (e: any) {
-      toast(e?.message || 'Failed to save kit list', 'error')
+    } catch (e) {
+      toast(errorMessage(e, 'Failed to save kit list'), 'error')
     } finally {
       setSaving(false)
     }
@@ -572,10 +611,12 @@ export function ProjectDetailPage() {
   const handleStatusChange = async (status: ProjectStatus) => {
     try {
       await updateProject.mutateAsync({ id: id!, status })
-    } catch (e: any) {
-      toast(e?.message || 'Failed to update status', 'error')
+    } catch (e) {
+      toast(errorMessage(e, 'Failed to update status'), 'error')
     }
   }
+
+  const itemsById = useMemo(() => new Map(allItems.map(i => [i.id, i])), [allItems])
 
   const overallDiscountPct = project?.overall_discount_pct ?? 0
   const { subtotal, linesSubtotal, overallDiscount } = calcProjectTotals(lines, overallDiscountPct)
@@ -590,8 +631,8 @@ export function ProjectDetailPage() {
     if (nameValue.trim() && nameValue !== project?.name) {
       try {
         await updateProject.mutateAsync({ id: id!, name: nameValue.trim() })
-      } catch (e: any) {
-        toast(e?.message || 'Failed to rename', 'error')
+      } catch (e) {
+        toast(errorMessage(e, 'Failed to rename'), 'error')
       }
     }
     setEditingName(false)
@@ -601,21 +642,34 @@ export function ProjectDetailPage() {
 
   if (isLoading || !project) return <div className="p-6 text-sm text-gray-500">Loading...</div>
 
-  // Group visible lines by category for display
-  const topLines = lines.filter(l => !l.is_component)
-  const grouped: Record<string, LineItemDraft[]> = {}
-  topLines.forEach(l => {
-    if (!grouped[l.category]) grouped[l.category] = []
-    grouped[l.category].push(l)
+  // Group visible lines by category, carrying each line's index in `lines` so the
+  // render doesn't have to indexOf() its way back (which was O(n^2) per render).
+  const grouped = new Map<string, { line: LineItemDraft; index: number; children: { line: LineItemDraft; index: number }[] }[]>()
+  lines.forEach((line, index) => {
+    if (line.is_component) return
+    // Component rows follow their parent until the next top-level row.
+    const children: { line: LineItemDraft; index: number }[] = []
+    for (let i = index + 1; i < lines.length && lines[i].is_component; i++) {
+      children.push({ line: lines[i], index: i })
+    }
+    const bucket = grouped.get(line.category)
+    if (bucket) bucket.push({ line, index, children })
+    else grouped.set(line.category, [{ line, index, children }])
   })
 
+  const qtyByItemId = new Map<string, number>()
+  for (const l of lines) {
+    if (l.is_component || !l.item_id) continue
+    qtyByItemId.set(l.item_id, (qtyByItemId.get(l.item_id) ?? 0) + l.quantity)
+  }
+
   const detailsPanel = (
-    <ProjectDetailsPanel ref={panelRef} project={project} clients={clients} onStatusChange={handleStatusChange} onRefreshClients={() => refetchClients()} onSave={async updates => {
+    <ProjectDetailsPanel project={project} clients={clients} onStatusChange={handleStatusChange} onRefreshClients={() => refetchClients()} onSave={async updates => {
       try {
         await updateProject.mutateAsync({ id: id!, ...updates })
         toast('Details saved')
-      } catch (e: any) {
-        toast(e?.message || 'Failed to save details', 'error')
+      } catch (e) {
+        toast(errorMessage(e, 'Failed to save details'), 'error')
         throw e
       }
     }} />
@@ -630,7 +684,6 @@ export function ProjectDetailPage() {
       const body = encodeURIComponent(`Dear ${project.client!.name},\n\nPlease find attached your quotation ${project.project_number} for ${project.name}.\n\nKind regards`)
       window.location.href = `mailto:${project.client!.email}?subject=${subject}&body=${body}`
     }}] : []),
-    { label: 'Force save', icon: ArrowLeft, action: () => panelRef.current?.save() },
     { label: 'Delete project', icon: Trash2, action: () => setConfirmDelete(true), danger: true },
   ]
 
@@ -688,7 +741,6 @@ export function ProjectDetailPage() {
               <Send size={14} />Send quote
             </Button>
           )}
-          <Button variant="secondary" size="sm" onClick={() => panelRef.current?.save()}>Force save</Button>
           <Button variant="danger" size="sm" onClick={() => setConfirmDelete(true)}><Trash2 size={14} />Delete</Button>
         </div>
 
@@ -737,17 +789,22 @@ export function ProjectDetailPage() {
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-semibold text-gray-700">Kit list</h2>
-                {localLines && (
+                {hasUnsavedLines && (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
                     Unsaved changes
                   </span>
                 )}
               </div>
               <div className="flex gap-1.5 flex-wrap justify-end">
-                {localLines && (
-                  <Button size="sm" onClick={saveLines} disabled={saving}>
-                    {saving ? 'Saving...' : 'Save'}
-                  </Button>
+                {hasUnsavedLines && (
+                  <>
+                    <Button variant="ghost" size="sm" onClick={() => setLocalLines(null)} disabled={saving}>
+                      Discard
+                    </Button>
+                    <Button size="sm" onClick={saveLines} disabled={saving}>
+                      {saving ? 'Saving…' : 'Save kit list'}
+                    </Button>
+                  </>
                 )}
                 <Button variant="ghost" size="sm" onClick={() => setShowAddService(true)}><Plus size={14} /><span className="hidden sm:inline">Service / crew</span><span className="sm:hidden">Service</span></Button>
                 <Button variant="secondary" size="sm" onClick={() => setShowAddItem(true)}><Plus size={14} />Add item</Button>
@@ -771,18 +828,16 @@ export function ProjectDetailPage() {
                   <span />
                 </div>
 
-                {Object.entries(grouped).map(([cat, catLines]) => (
+                {[...grouped.entries()].map(([cat, catLines]) => (
                   <div key={cat}>
                     <div className="px-4 py-1.5 bg-gray-50 border-y border-gray-100">
-                      <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{cat}</span>
+                      <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{cat || 'Uncategorised'}</span>
                     </div>
-                    {catLines.map((line) => {
-                      const lineIdx = lines.indexOf(line)
+                    {catLines.map(({ line, index: lineIdx, children }) => {
                       const total = calcLineTotal(line.unit_price, line.quantity, line.days, line.discount_pct)
-                      const children = lines.filter(l => l.is_component && l.item_id === line.item_id && l !== line && lines.indexOf(l) > lineIdx)
-                      const subhireItem = line.item_id ? allItems.find(i => i.id === line.item_id) : null
+                      const subhireItem = line.item_id ? itemsById.get(line.item_id) : null
                       const avail = line.item_id ? availabilityMap.get(line.item_id) : undefined
-                      const thisProjectQty = lines.filter(l => l.item_id === line.item_id && !l.is_component).reduce((s, l) => s + l.quantity, 0)
+                      const thisProjectQty = line.item_id ? (qtyByItemId.get(line.item_id) ?? 0) : 0
                       const effectiveAvail = avail ? avail.available + thisProjectQty : null
                       const overbooked = effectiveAvail !== null && line.quantity > effectiveAvail
 
@@ -854,8 +909,7 @@ export function ProjectDetailPage() {
                           </div>
 
                           {/* Component sub-lines */}
-                          {children.map((child) => {
-                            const ci = lines.indexOf(child)
+                          {children.map(({ line: child, index: ci }) => {
                             return (
                               <div key={ci} className="hidden md:grid grid-cols-[1fr_60px_60px_80px_60px_70px_56px] gap-2 px-4 py-1 items-center border-b border-gray-50 bg-gray-50/50">
                                 <span className="text-xs text-gray-400 pl-4">{child.description}</span>
@@ -930,12 +984,39 @@ export function ProjectDetailPage() {
       <AddServiceModal open={showAddService} onClose={() => setShowAddService(false)} onAdd={addService} />
 
       {/* Confirm delete */}
-      <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title="Delete project" size="sm">
+      <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title="Delete project" size="sm" closeOnBackdrop={false}>
         <div className="space-y-4">
-          <p className="text-sm text-gray-700">Delete <strong>{project.name}</strong>? All kit list data will be lost. Cannot be undone.</p>
+          <p className="text-sm text-gray-700">
+            Delete <strong>{project.name}</strong>? All kit list data will be lost. Cannot be undone.
+          </p>
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setConfirmDelete(false)}>Cancel</Button>
-            <Button variant="danger" onClick={async () => { await deleteProject.mutateAsync(id!); navigate('/projects') }}>Delete</Button>
+            <Button variant="danger" disabled={deleteProject.isPending} onClick={async () => {
+              try {
+                await deleteProject.mutateAsync(id!)
+                // The project is gone; don't challenge the redirect over its kit list.
+                unsaved.allowNext()
+                setLocalLines(null)
+                navigate('/projects', { replace: true })
+              } catch (e) {
+                toast(errorMessage(e, 'Failed to delete project'), 'error')
+              }
+            }}>{deleteProject.isPending ? 'Deleting…' : 'Delete'}</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Navigating away with an unedited kit list used to lose the work silently */}
+      <Modal open={unsaved.isBlocked} onClose={unsaved.stay} title="Unsaved kit list" size="sm" closeOnBackdrop={false}>
+        <div className="space-y-4">
+          <p className="text-sm text-gray-700">
+            You have unsaved changes to this kit list. Leaving now discards them.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={unsaved.stay}>Keep editing</Button>
+            <Button variant="danger" onClick={() => { setLocalLines(null); unsaved.discard() }}>
+              Discard changes
+            </Button>
           </div>
         </div>
       </Modal>

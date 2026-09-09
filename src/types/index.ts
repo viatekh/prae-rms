@@ -159,3 +159,30 @@ export interface Settings {
   payment_terms: string
   tc_text: string
 }
+
+/** A line item as held in local editing state, before it has a DB row. */
+export type LineItemDraft = Omit<ProjectLineItem, 'id' | 'item' | 'package' | 'children'>
+
+/** The subset of a line item that revenue maths needs. */
+export interface PricedLine {
+  unit_price: number
+  quantity: number
+  days: number
+  discount_pct: number
+  is_component: boolean
+  description?: string
+}
+
+/** Shape returned by the dashboard/report aggregate queries. */
+export interface ProjectRevenueRow {
+  id: string
+  name: string
+  project_number: string
+  status: ProjectStatus
+  client_id: string | null
+  client?: { name: string } | null
+  event_date: string | null
+  created_at: string
+  overall_discount_pct: number | null
+  line_items: PricedLine[]
+}

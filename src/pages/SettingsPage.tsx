@@ -1,108 +1,46 @@
-import { useState, useEffect } from 'react'
-import { Plus, Trash2, GripVertical, Pencil, Check, X } from 'lucide-react'
-import { useSettings, useSaveSettings, useCreateCategory, useUpdateCategory, useDeleteCategory } from '../hooks/useSettings'
-import { useCategories } from '../hooks/useItems'
-import type { Settings, Category } from '../types'
+import { useState } from 'react'
+import { useSettings, useSaveSettings } from '../hooks/useSettings'
+import type { Settings } from '../types'
 import { Input, Textarea } from '../components/shared/Input'
 import { Button } from '../components/shared/Button'
-
-function CategoriesSection() {
-  const { data: categories = [] } = useCategories()
-  const create = useCreateCategory()
-  const update = useUpdateCategory()
-  const del = useDeleteCategory()
-  const [adding, setAdding] = useState(false)
-  const [newName, setNewName] = useState('')
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editName, setEditName] = useState('')
-
-  const handleAdd = async () => {
-    if (!newName.trim()) return
-    await create.mutateAsync({ name: newName.trim(), sort_order: categories.length + 1 })
-    setNewName('')
-    setAdding(false)
-  }
-
-  const handleEdit = async (cat: Category) => {
-    if (!editName.trim()) return
-    await update.mutateAsync({ id: cat.id, name: editName.trim(), sort_order: cat.sort_order })
-    setEditingId(null)
-  }
-
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-sm font-semibold text-gray-700">Categories</h2>
-        <Button variant="ghost" size="sm" onClick={() => setAdding(true)}><Plus size={14} />Add</Button>
-      </div>
-      <div className="space-y-1">
-        {categories.map(cat => (
-          <div key={cat.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 group">
-            <GripVertical size={14} className="text-gray-300 shrink-0" />
-            {editingId === cat.id ? (
-              <>
-                <input
-                  autoFocus
-                  className="flex-1 text-sm px-2 py-0.5 border border-gray-300 rounded"
-                  value={editName}
-                  onChange={e => setEditName(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') handleEdit(cat); if (e.key === 'Escape') setEditingId(null) }}
-                />
-                <button onClick={() => handleEdit(cat)} className="text-green-600 hover:text-green-700"><Check size={14} /></button>
-                <button onClick={() => setEditingId(null)} className="text-gray-400 hover:text-gray-600"><X size={14} /></button>
-              </>
-            ) : (
-              <>
-                <span className="flex-1 text-sm text-gray-700">{cat.name}</span>
-                <button onClick={() => { setEditingId(cat.id); setEditName(cat.name) }} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-gray-600"><Pencil size={13} /></button>
-                <button onClick={() => del.mutateAsync(cat.id)} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500"><Trash2 size={13} /></button>
-              </>
-            )}
-          </div>
-        ))}
-        {adding && (
-          <div className="flex items-center gap-2 px-2 py-1.5">
-            <GripVertical size={14} className="text-gray-200 shrink-0" />
-            <input
-              autoFocus
-              className="flex-1 text-sm px-2 py-0.5 border border-gray-300 rounded"
-              placeholder="Category name"
-              value={newName}
-              onChange={e => setNewName(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') handleAdd(); if (e.key === 'Escape') setAdding(false) }}
-            />
-            <button onClick={handleAdd} className="text-green-600 hover:text-green-700"><Check size={14} /></button>
-            <button onClick={() => setAdding(false)} className="text-gray-400 hover:text-gray-600"><X size={14} /></button>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
+import { CategoryManager } from '../components/inventory/CategoryManager'
+import { useToast } from '../lib/toast-context'
+import { errorMessage } from '../lib/errors'
 
 export function SettingsPage() {
   const { data: settings, isLoading } = useSettings()
   const save = useSaveSettings()
-  const [form, setForm] = useState<Partial<Settings>>({})
+  const toast = useToast()
+  // Only the fields the user has actually touched are held locally; everything
+  // else reads straight from the server copy, so a refetch can't clobber edits
+  // and edits can't be silently reverted by one.
+  const [edits, setEdits] = useState<Partial<Settings>>({})
   const [saved, setSaved] = useState(false)
 
-  useEffect(() => {
-    if (settings) setForm(settings)
-  }, [settings])
+  const form: Partial<Settings> = { ...settings, ...edits }
+  const isDirty = Object.keys(edits).length > 0
 
-  const upd = (field: keyof Settings, value: any) => setForm(f => ({ ...f, [field]: value }))
+  function upd<K extends keyof Settings>(field: K, value: Settings[K]) {
+    setEdits(f => ({ ...f, [field]: value }))
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    await save.mutateAsync(form)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+    if (!isDirty) return
+    try {
+      await save.mutateAsync(edits)
+      setEdits({})
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (err) {
+      toast(errorMessage(err, 'Failed to save settings'), 'error')
+    }
   }
 
-  if (isLoading) return <div className="p-6 text-sm text-gray-500">Loading...</div>
+  if (isLoading) return <div className="p-6 text-sm text-gray-500">Loading…</div>
 
   return (
-    <div className="p-6 max-w-2xl">
+    <div className="p-3 md:p-6 max-w-2xl">
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Settings</h1>
 
       <form onSubmit={handleSubmit} className="space-y-5">
@@ -161,15 +99,15 @@ export function SettingsPage() {
         </div>
 
         <div className="flex justify-end">
-          <Button type="submit" disabled={save.isPending}>
-            {saved ? '✓ Saved' : save.isPending ? 'Saving...' : 'Save settings'}
+          <Button type="submit" disabled={save.isPending || !isDirty}>
+            {saved ? '✓ Saved' : save.isPending ? 'Saving…' : isDirty ? 'Save settings' : 'No changes'}
           </Button>
         </div>
       </form>
 
       {/* Categories — separate from the main save form */}
       <div className="mt-5">
-        <CategoriesSection />
+        <CategoryManager />
       </div>
     </div>
   )

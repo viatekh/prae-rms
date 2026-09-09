@@ -6,7 +6,8 @@ import { supabase } from '../../lib/supabase'
 import { useCategories } from '../../hooks/useItems'
 import { Button } from '../shared/Button'
 import { Modal } from '../shared/Modal'
-import { useToast } from '../shared/Toast'
+import { useToast } from '../../lib/toast-context'
+import { errorMessage } from '../../lib/errors'
 
 interface Props {
   open: boolean
@@ -102,8 +103,8 @@ export function CSVImport({ open, onClose, onImported, existingIds }: Props) {
           await supabase.from('item_components').insert(components.map(c => ({ ...c, item_id: created.id })))
         }
         success++
-      } catch (e: any) {
-        errors.push(`${row.item_id || row.name}: ${e.message}`)
+      } catch (e) {
+        errors.push(`${row.item_id || row.name}: ${errorMessage(e, 'import failed')}`)
       }
     }
 

@@ -46,8 +46,8 @@ export function useUpdateItem() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ id, ...updates }: Partial<Item> & { id: string }) => {
-      // Strip joined relation objects
-      const { category, components, ...scalars } = updates as any
+      // Strip joined relation objects — only scalar columns may be written.
+      const { category: _category, components: _components, ...scalars } = updates
       const { data, error } = await supabase.from('items').update(scalars).eq('id', id).select().single()
       if (error) throw error
       return data

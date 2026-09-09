@@ -1,17 +1,22 @@
-import { useState, useEffect, useMemo } from 'react'
-import { Plus, Search, ChevronDown, ChevronRight, Pencil, Trash2, AlertTriangle, Copy, Download, Upload, Tag, AlertCircle, ClipboardList } from 'lucide-react'
+import { useState, useMemo, useCallback } from 'react'
+import { Plus, Search, ChevronDown, ChevronRight, Pencil, Trash2, AlertTriangle, Copy, Download, Upload, AlertCircle, ClipboardList } from 'lucide-react'
 import { useItemLogs, useAddItemLog, useDeleteItemLog } from '../hooks/useItemLogs'
 import { itemsToCSV, downloadCSV } from '../lib/csv'
 import { CSVImport } from '../components/inventory/CSVImport'
-import { useNavigate } from 'react-router-dom'
-import { useToast } from '../components/shared/Toast'
+import { CategoryManager } from '../components/inventory/CategoryManager'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useToast } from '../lib/toast-context'
 import { useItems, useCreateItem, useUpdateItem, useDeleteItem, useSaveComponents, useCategories } from '../hooks/useItems'
-import { useCreateCategory, useUpdateCategory, useDeleteCategory } from '../hooks/useSettings'
 import { usePackages, useCreatePackage, useUpdatePackage, useDeletePackage } from '../hooks/usePackages'
-import { useItems as useAllItems } from '../hooks/useItems'
 import { useProjectsWithLines } from '../hooks/useProjects'
 import { useItemTypeAvailability } from '../hooks/useAvailability'
-import type { Item, Package } from '../types'
+import type { Item, Package, ItemComponent, PackageItem } from '../types'
+import { errorMessage } from '../lib/errors'
+
+type NewItem = Omit<Item, 'id' | 'created_at' | 'category' | 'components'>
+type NewComponent = Omit<ItemComponent, 'id' | 'item_id'>
+type NewPackage = Omit<Package, 'id' | 'created_at' | 'category' | 'package_items'>
+type NewPackageItem = Omit<PackageItem, 'id' | 'package_id' | 'item'>
 import { StatusBadge } from '../components/shared/Badge'
 import { format, parseISO } from 'date-fns'
 import { Button } from '../components/shared/Button'
@@ -80,8 +85,8 @@ function BulkAddModal({ open, onClose, items }: { open: boolean; onClose: () => 
       toast(`Added ${preview.length} item${preview.length !== 1 ? 's' : ''}`)
       setText('')
       onClose()
-    } catch (e: any) {
-      toast(e?.message || 'Failed', 'error')
+    } catch (e) {
+      toast(errorMessage(e, 'Bulk add failed'), 'error')
     } finally {
       setSaving(false)
     }
@@ -127,8 +132,6 @@ function BulkAddModal({ open, onClose, items }: { open: boolean; onClose: () => 
   )
 }
 
-// ─── Categories tab ───────────────────────────────────────────────────────────
-
 function ItemMaintenanceLog({ itemId }: { itemId: string }) {
   const { data: logs = [] } = useItemLogs(itemId)
   const addLog = useAddItemLog()
@@ -171,69 +174,9 @@ function ItemMaintenanceLog({ itemId }: { itemId: string }) {
   )
 }
 
-function CategoriesTab() {
-  const { data: categories = [] } = useCategories()
-  const create = useCreateCategory()
-  const update = useUpdateCategory()
-  const del = useDeleteCategory()
-  const toast = useToast()
-  const [adding, setAdding] = useState(false)
-  const [newName, setNewName] = useState('')
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editName, setEditName] = useState('')
-  const { Check, X, Pencil, Trash2: T2 } = { Check: ({ size }: any) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><polyline points="20 6 9 17 4 12"/></svg>, X: ({ size }: any) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>, Pencil: ({ size }: any) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>, Trash2: ({ size }: any) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg> }
-
-  return (
-    <div className="max-w-md">
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-gray-700">Categories</h2>
-          <Button variant="ghost" size="sm" onClick={() => setAdding(true)}><Plus size={14} />Add</Button>
-        </div>
-        <div className="space-y-1">
-          {categories.map(cat => (
-            <div key={cat.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 group">
-              <Tag size={13} className="text-gray-300 shrink-0" />
-              {editingId === cat.id ? (
-                <>
-                  <input autoFocus className="flex-1 text-sm px-2 py-0.5 border border-gray-300 rounded"
-                    value={editName} onChange={e => setEditName(e.target.value)}
-                    onKeyDown={async e => {
-                      if (e.key === 'Enter') { await update.mutateAsync({ id: cat.id, name: editName.trim(), sort_order: cat.sort_order }); setEditingId(null) }
-                      if (e.key === 'Escape') setEditingId(null)
-                    }} />
-                  <button onClick={async () => { await update.mutateAsync({ id: cat.id, name: editName.trim(), sort_order: cat.sort_order }); setEditingId(null) }} className="text-green-600 hover:text-green-700"><Check size={14} /></button>
-                  <button onClick={() => setEditingId(null)} className="text-gray-400 hover:text-gray-600"><X size={14} /></button>
-                </>
-              ) : (
-                <>
-                  <span className="flex-1 text-sm text-gray-700">{cat.name}</span>
-                  <button onClick={() => { setEditingId(cat.id); setEditName(cat.name) }} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-gray-600"><Pencil size={13} /></button>
-                  <button onClick={async () => { try { await del.mutateAsync(cat.id) } catch { toast('Cannot delete — category in use', 'error') } }} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500"><T2 size={13} /></button>
-                </>
-              )}
-            </div>
-          ))}
-          {adding && (
-            <div className="flex items-center gap-2 px-2 py-1.5">
-              <Tag size={13} className="text-gray-200 shrink-0" />
-              <input autoFocus className="flex-1 text-sm px-2 py-0.5 border border-gray-300 rounded"
-                placeholder="Category name" value={newName} onChange={e => setNewName(e.target.value)}
-                onKeyDown={async e => {
-                  if (e.key === 'Enter' && newName.trim()) { await create.mutateAsync({ name: newName.trim(), sort_order: categories.length + 1 }); setNewName(''); setAdding(false) }
-                  if (e.key === 'Escape') setAdding(false)
-                }} />
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // ─── Items tab ───────────────────────────────────────────────────────────────
 
-function ItemsTab() {
+function ItemsTab({ search, onSearch }: { search: string; onSearch: (v: string) => void }) {
   const { data: items = [], isLoading } = useItems()
   const { data: allProjects = [] } = useProjectsWithLines()
   const createItem = useCreateItem()
@@ -242,7 +185,6 @@ function ItemsTab() {
   const saveComponents = useSaveComponents()
   const navigate = useNavigate()
 
-  const [search, setSearch] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [showBulk, setShowBulk] = useState(false)
   const [editing, setEditing] = useState<Item | null>(null)
@@ -264,11 +206,16 @@ function ItemsTab() {
   const toast = useToast()
 
   const toggleExpanded = (id: string) =>
-    setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+    setExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
 
   const existingIds = items.map(i => i.item_id)
 
-  const handleSave = async (itemData: any, components: any[]) => {
+  const handleSave = async (itemData: NewItem, components: NewComponent[]) => {
     try {
       if (editing) {
         await updateItem.mutateAsync({ id: editing.id, ...itemData })
@@ -281,8 +228,8 @@ function ItemsTab() {
         setShowForm(false)
         toast('Item added')
       }
-    } catch (e: any) {
-      toast(e?.message || 'Save failed — check console', 'error')
+    } catch (e) {
+      toast(errorMessage(e, 'Save failed'), 'error')
     }
   }
 
@@ -312,24 +259,26 @@ function ItemsTab() {
       })
     }
     toast('Item duplicated')
-    } catch (e: any) {
-      toast(e?.message || 'Duplicate failed', 'error')
+    } catch (e) {
+      toast(errorMessage(e, 'Duplicate failed'), 'error')
     }
   }
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <div className="relative">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+      <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           <input
-            className="pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg w-72 bg-white focus:outline-none focus:ring-2 focus:ring-gray-900"
+            type="search"
+            aria-label="Search items"
+            className="pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg w-full sm:w-72 bg-white focus:outline-none focus:ring-2 focus:ring-gray-900"
             placeholder="Search items or IDs..."
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={e => onSearch(e.target.value)}
           />
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 shrink-0">
           <Button variant="secondary" onClick={() => setShowBulk(true)}><Plus size={16} />Bulk add</Button>
           <Button onClick={() => setShowForm(true)}><Plus size={16} />Add item</Button>
         </div>
@@ -477,16 +426,16 @@ function ItemsTab() {
 
 function PackageForm({ initial, onSave, onCancel, existingIds = [] }: {
   initial?: Package
-  onSave: (pkg: any, items: any[]) => void
+  onSave: (pkg: NewPackage, items: NewPackageItem[]) => void
   onCancel: () => void
   existingIds?: string[]
 }) {
-  const { data: allItems = [] } = useAllItems()
+  const { data: allItems = [] } = useItems()
   const { data: categories = [] } = useCategories()
   const [name, setName] = useState(initial?.name || '')
-  const [pkgId, setPkgId] = useState(initial?.package_id || '')
+  const [manualPkgId, setManualPkgId] = useState(initial?.package_id || '')
   const [categoryId, setCategoryId] = useState(initial?.category_id || '')
-  const [dayPrice, setDayPrice] = useState(String(initial?.day_price || ''))
+  const [manualDayPrice, setManualDayPrice] = useState(String(initial?.day_price || ''))
   const [weekPrice, setWeekPrice] = useState(String(initial?.week_price || ''))
   const [monthPrice, setMonthPrice] = useState(String(initial?.month_price || ''))
   const [priceOverridden, setPriceOverridden] = useState(!!initial)
@@ -496,23 +445,22 @@ function PackageForm({ initial, onSave, onCancel, existingIds = [] }: {
   )
   const [idEdited, setIdEdited] = useState(!!initial)
 
-  // Auto-calculate price from items unless user has manually overridden
-  useEffect(() => {
-    if (priceOverridden) return
-    const sum = pkgItems.reduce((acc, pi) => {
-      const item = allItems.find(i => i.id === pi.item_id)
-      return acc + (item?.day_price || 0) * pi.quantity
-    }, 0)
-    if (sum > 0) setDayPrice(sum.toFixed(2))
-  }, [pkgItems, allItems, priceOverridden])
+  // Both of these are derived during render. Mirroring them into state via an
+  // effect meant an extra render pass and a window where the two disagreed.
+  const itemsSum = useMemo(() => pkgItems.reduce((acc, pi) => {
+    const item = allItems.find(i => i.id === pi.item_id)
+    return acc + (item?.day_price || 0) * pi.quantity
+  }, 0), [pkgItems, allItems])
 
-  useEffect(() => {
-    if (idEdited || initial || !name.trim()) return
+  const dayPrice = priceOverridden || itemsSum === 0 ? manualDayPrice : itemsSum.toFixed(2)
+
+  const pkgId = useMemo(() => {
+    if (idEdited || initial || !name.trim()) return manualPkgId
     const code = generateItemCode(name)
     let counter = 1
     while (existingIds.includes(formatItemId(code, counter))) counter++
-    setPkgId(formatItemId(code, counter))
-  }, [name, idEdited, initial, existingIds])
+    return formatItemId(code, counter)
+  }, [name, manualPkgId, idEdited, initial, existingIds])
 
   return (
     <form onSubmit={e => {
@@ -527,7 +475,7 @@ function PackageForm({ initial, onSave, onCancel, existingIds = [] }: {
     }} className="space-y-4">
       <div className="grid grid-cols-2 gap-4">
         <Input label="Package name *" value={name} onChange={e => setName(e.target.value)} required />
-        <Input label="Package ID *" value={pkgId} onChange={e => { setPkgId(e.target.value.toUpperCase()); setIdEdited(true) }} required className="font-mono" />
+        <Input label="Package ID *" value={pkgId} onChange={e => { setManualPkgId(e.target.value.toUpperCase()); setIdEdited(true) }} required className="font-mono" />
       </div>
       <Select label="Category" value={categoryId} onChange={e => setCategoryId(e.target.value)} required>
         <option value="">Select category</option>
@@ -536,7 +484,7 @@ function PackageForm({ initial, onSave, onCancel, existingIds = [] }: {
       <div className="grid grid-cols-3 gap-4">
         <div>
           <Input label={priceOverridden ? 'Day price (£)' : 'Day price (£) — auto from items'} type="number" step="0.01" min="0" value={dayPrice}
-            onChange={e => { setDayPrice(e.target.value); setPriceOverridden(true) }}
+            onChange={e => { setManualDayPrice(e.target.value); setPriceOverridden(true) }}
             className={!priceOverridden ? 'border-blue-300 bg-blue-50' : ''} />
           {priceOverridden && <button type="button" className="text-xs text-blue-500 hover:underline mt-0.5" onClick={() => setPriceOverridden(false)}>Reset to auto</button>}
         </div>
@@ -595,7 +543,12 @@ function PackagesTab() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [confirmDelete, setConfirmDelete] = useState<Package | null>(null)
 
-  const toggle = (id: string) => setExpanded(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const toggle = (id: string) => setExpanded(prev => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
   const existingIds = packages.map(p => p.package_id)
 
   return (
@@ -684,22 +637,48 @@ function PackagesTab() {
 
 type Tab = 'items' | 'packages' | 'categories'
 
+const TABS: Tab[] = ['items', 'packages', 'categories']
+
+function isTab(value: string | null): value is Tab {
+  return !!value && (TABS as string[]).includes(value)
+}
+
 export function InventoryPage() {
   const { data: items = [] } = useItems()
-  const [tab, setTab] = useState<Tab>('items')
   const [showImport, setShowImport] = useState(false)
   const existingIds = items.map(i => i.item_id)
 
-  // Low availability warning: check next 14 days
-  const today = useMemo(() => new Date().toISOString(), [])
-  const in14 = useMemo(() => new Date(Date.now() + 14 * 86400000).toISOString(), [])
-  const availMap = useItemTypeAvailability(items, '', today, in14)
+  // Tab and search live in the URL: the view survives a refresh or a trip to a
+  // project and back, and global search can deep-link straight to an item.
+  const [params, setParams] = useSearchParams()
+  const tabParam = params.get('tab')
+  const tab: Tab = isTab(tabParam) ? tabParam : 'items'
+  const search = params.get('q') ?? ''
+
+  const setParam = useCallback((key: string, value: string, fallback?: string) => {
+    setParams(prev => {
+      const next = new URLSearchParams(prev)
+      if (value && value !== fallback) next.set(key, value)
+      else next.delete(key)
+      return next
+    }, { replace: true })
+  }, [setParams])
+
+  // "Fully booked" warning for the next 14 days. Both bounds are day-precision
+  // so they line up with how project dates are stored.
+  const { todayIso, in14Iso } = useMemo(() => {
+    const now = new Date()
+    const later = new Date(now.getTime() + 14 * 86_400_000)
+    return { todayIso: now.toISOString().slice(0, 10), in14Iso: later.toISOString().slice(0, 10) }
+  }, [])
+  const availMap = useItemTypeAvailability(items, '', todayIso, in14Iso)
   const zeroAvailItems = useMemo(() => {
     const seen = new Set<string>()
     return items.filter(item => {
-      if (seen.has(item.name)) return false
+      const key = item.name.trim().toLowerCase()
+      if (seen.has(key)) return false
       const a = availMap.get(item.id)
-      if (a && a.total > 0 && a.available === 0) { seen.add(item.name); return true }
+      if (a && a.total > 0 && a.available === 0) { seen.add(key); return true }
       return false
     })
   }, [items, availMap])
@@ -711,8 +690,8 @@ export function InventoryPage() {
           <h1 className="text-2xl font-bold text-gray-900">Inventory</h1>
           <p className="text-sm text-gray-500 mt-0.5">{items.length} items</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="secondary" size="sm" onClick={() => downloadCSV(itemsToCSV(items), `inventory-${new Date().toISOString().slice(0,10)}.csv`)}>
+        <div className="flex gap-2 shrink-0">
+          <Button variant="secondary" size="sm" onClick={() => downloadCSV(itemsToCSV(items), `inventory-${new Date().toISOString().slice(0, 10)}.csv`)}>
             <Download size={15} />Export CSV
           </Button>
           <Button variant="secondary" size="sm" onClick={() => setShowImport(true)}>
@@ -733,15 +712,20 @@ export function InventoryPage() {
 
       {/* Tabs */}
       <div className="flex items-center gap-1 mb-6 border-b border-gray-200">
-        {(['items', 'packages', 'categories'] as Tab[]).map(t => (
-          <button key={t} onClick={() => setTab(t)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors capitalize ${tab === t ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+        {TABS.map(t => (
+          <button key={t} type="button" onClick={() => setParam('tab', t, 'items')}
+            aria-current={tab === t ? 'page' : undefined}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors capitalize cursor-pointer ${
+              tab === t ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}>
             {t}
           </button>
         ))}
       </div>
 
-      {tab === 'items' ? <ItemsTab /> : tab === 'packages' ? <PackagesTab /> : <CategoriesTab />}
+      {tab === 'items' ? <ItemsTab search={search} onSearch={v => setParam('q', v)} />
+        : tab === 'packages' ? <PackagesTab />
+        : <div className="max-w-md"><CategoryManager /></div>}
 
       <CSVImport
         open={showImport}

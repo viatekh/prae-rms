@@ -1,27 +1,11 @@
 import { useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { supabase } from '../lib/supabase'
 import { format, parseISO, subMonths, startOfMonth, endOfMonth } from 'date-fns'
 import { formatCurrency, calcProjectTotals } from '../lib/utils'
 import { TrendingUp, Users, Package } from 'lucide-react'
-
-function useRevenueData() {
-  return useQuery({
-    queryKey: ['revenue-report'],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('projects')
-        .select('*, client:clients(name), line_items:project_line_items(*)')
-        .in('status', ['confirmed', 'invoiced', 'completed'])
-      if (error) throw error
-      return data as any[]
-    },
-    staleTime: 60_000,
-  })
-}
+import { useProjectRevenue } from '../hooks/useRevenue'
 
 export function ReportsPage() {
-  const { data: projects = [], isLoading } = useRevenueData()
+  const { data: projects = [], isLoading } = useProjectRevenue()
 
   const months = useMemo(() => {
     const result = []
@@ -67,12 +51,13 @@ export function ReportsPage() {
   const topItems = useMemo(() => {
     const itemMap: Record<string, { name: string; bookings: number; revenue: number }> = {}
     projects.forEach(p => {
-      ;(p.line_items || []).filter((l: any) => !l.is_component).forEach((l: any) => {
-        const key = l.description
-        if (!itemMap[key]) itemMap[key] = { name: l.description, bookings: 0, revenue: 0 }
+      for (const l of (p.line_items ?? [])) {
+        if (l.is_component) continue
+        const key = l.description ?? 'Untitled line'
+        if (!itemMap[key]) itemMap[key] = { name: key, bookings: 0, revenue: 0 }
         itemMap[key].bookings++
         itemMap[key].revenue += (l.unit_price * l.quantity * l.days) * (1 - (l.discount_pct / 100))
-      })
+      }
     })
     return Object.values(itemMap)
       .sort((a, b) => b.bookings - a.bookings)

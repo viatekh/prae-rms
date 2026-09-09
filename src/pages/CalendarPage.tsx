@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { ChevronLeft, ChevronRight, List } from 'lucide-react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useProjects } from '../hooks/useProjects'
 import type { Project } from '../types'
 import { supabase } from '../lib/supabase'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   format, startOfMonth, endOfMonth, eachDayOfInterval,
   isSameMonth, isToday, parseISO, isWithinInterval,
@@ -128,6 +128,14 @@ function ProjectChip({ p, day, onNavigate, className }: {
   )
 }
 
+interface CalendarViewProps {
+  projects: Project[]
+  onNavigate: (id: string) => void
+  /** The date the calendar is centred on; shared so switching view keeps your place. */
+  current: Date
+  setCurrent: React.Dispatch<React.SetStateAction<Date>>
+}
+
 const STATUS_COLORS: Record<string, string> = {
   draft:     'bg-gray-200 text-gray-700',
   sent:      'bg-blue-100 text-blue-800',
@@ -159,8 +167,7 @@ function projectColor(p: Project): string {
 
 // ─── Month view ──────────────────────────────────────────────────────────────
 
-function MonthView({ projects, onNavigate }: { projects: Project[]; onNavigate: (id: string) => void }) {
-  const [current, setCurrent] = useState(new Date())
+function MonthView({ projects, onNavigate, current, setCurrent }: CalendarViewProps) {
   const monthStart = startOfMonth(current)
   const monthEnd   = endOfMonth(current)
   const calStart   = startOfWeek(monthStart, { weekStartsOn: 1 })
@@ -172,13 +179,13 @@ function MonthView({ projects, onNavigate }: { projects: Project[]; onNavigate: 
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold text-gray-900">{format(current, 'MMMM yyyy')}</h1>
         <div className="flex gap-1">
-          <button onClick={() => setCurrent(m => subMonths(m, 1))} className="p-2 rounded-lg hover:bg-gray-100"><ChevronLeft size={18} /></button>
-          <button onClick={() => setCurrent(new Date())} className="px-3 py-1.5 text-sm rounded-lg hover:bg-gray-100">Today</button>
-          <button onClick={() => setCurrent(m => addMonths(m, 1))} className="p-2 rounded-lg hover:bg-gray-100"><ChevronRight size={18} /></button>
+          <button onClick={() => setCurrent(m => subMonths(m, 1))} aria-label="Previous month" className="p-2 rounded-lg hover:bg-gray-100 cursor-pointer"><ChevronLeft size={18} /></button>
+          <button onClick={() => setCurrent(new Date())} className="px-3 py-1.5 text-sm rounded-lg hover:bg-gray-100 cursor-pointer">Today</button>
+          <button onClick={() => setCurrent(m => addMonths(m, 1))} aria-label="Next month" className="p-2 rounded-lg hover:bg-gray-100 cursor-pointer"><ChevronRight size={18} /></button>
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="bg-white rounded-xl border border-gray-200">
         <div className="grid grid-cols-7 border-b border-gray-200">
           {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => (
             <div key={d} className="px-2 py-2 text-xs font-medium text-gray-400 text-center">{d}</div>
@@ -217,11 +224,11 @@ function MonthView({ projects, onNavigate }: { projects: Project[]; onNavigate: 
 
 // ─── Week view ───────────────────────────────────────────────────────────────
 
-function WeekView({ projects, onNavigate }: { projects: Project[]; onNavigate: (id: string) => void }) {
-  const [current, setCurrent] = useState(startOfWeek(new Date(), { weekStartsOn: 1 }))
+function WeekView({ projects, onNavigate, current, setCurrent }: CalendarViewProps) {
+  const weekStart = startOfWeek(current, { weekStartsOn: 1 })
   const days = eachDayOfInterval({
-    start: current,
-    end:   endOfWeek(current, { weekStartsOn: 1 }),
+    start: weekStart,
+    end:   endOfWeek(weekStart, { weekStartsOn: 1 }),
   })
 
   return (
@@ -231,13 +238,13 @@ function WeekView({ projects, onNavigate }: { projects: Project[]; onNavigate: (
           {format(days[0], 'd MMM')} – {format(days[6], 'd MMM yyyy')}
         </h1>
         <div className="flex gap-1">
-          <button onClick={() => setCurrent(w => subWeeks(w, 1))} className="p-2 rounded-lg hover:bg-gray-100"><ChevronLeft size={18} /></button>
-          <button onClick={() => setCurrent(startOfWeek(new Date(), { weekStartsOn: 1 }))} className="px-3 py-1.5 text-sm rounded-lg hover:bg-gray-100">This week</button>
-          <button onClick={() => setCurrent(w => addWeeks(w, 1))} className="p-2 rounded-lg hover:bg-gray-100"><ChevronRight size={18} /></button>
+          <button onClick={() => setCurrent(w => subWeeks(w, 1))} aria-label="Previous week" className="p-2 rounded-lg hover:bg-gray-100 cursor-pointer"><ChevronLeft size={18} /></button>
+          <button onClick={() => setCurrent(new Date())} className="px-3 py-1.5 text-sm rounded-lg hover:bg-gray-100 cursor-pointer">This week</button>
+          <button onClick={() => setCurrent(w => addWeeks(w, 1))} aria-label="Next week" className="p-2 rounded-lg hover:bg-gray-100 cursor-pointer"><ChevronRight size={18} /></button>
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="bg-white rounded-xl border border-gray-200">
         <div className="grid grid-cols-7 border-b border-gray-200">
           {days.map(day => (
             <div key={day.toISOString()} className={`px-2 py-2 text-center border-r border-gray-100 last:border-r-0 ${isToday(day) ? 'bg-gray-900' : ''}`}>
@@ -270,8 +277,7 @@ function WeekView({ projects, onNavigate }: { projects: Project[]; onNavigate: (
 
 // ─── Agenda / list view (mobile-friendly) ────────────────────────────────────
 
-function AgendaView({ projects, onNavigate }: { projects: Project[]; onNavigate: (id: string) => void }) {
-  const [current, setCurrent] = useState(new Date())
+function AgendaView({ projects, onNavigate, current, setCurrent }: CalendarViewProps) {
   // Show 30 days from current
   const days = eachDayOfInterval({ start: current, end: addMonths(current, 1) })
   const activeDays = days.filter(d => projectsForDay(projects, d).length > 0 ||
@@ -284,9 +290,9 @@ function AgendaView({ projects, onNavigate }: { projects: Project[]; onNavigate:
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold text-gray-900">{format(current, 'MMMM yyyy')}</h1>
         <div className="flex gap-1">
-          <button onClick={() => setCurrent(m => subMonths(m, 1))} className="p-2 rounded-lg hover:bg-gray-100"><ChevronLeft size={18} /></button>
-          <button onClick={() => setCurrent(new Date())} className="px-3 py-1.5 text-sm rounded-lg hover:bg-gray-100">Today</button>
-          <button onClick={() => setCurrent(m => addMonths(m, 1))} className="p-2 rounded-lg hover:bg-gray-100"><ChevronRight size={18} /></button>
+          <button onClick={() => setCurrent(m => subMonths(m, 1))} aria-label="Previous month" className="p-2 rounded-lg hover:bg-gray-100 cursor-pointer"><ChevronLeft size={18} /></button>
+          <button onClick={() => setCurrent(new Date())} className="px-3 py-1.5 text-sm rounded-lg hover:bg-gray-100 cursor-pointer">Today</button>
+          <button onClick={() => setCurrent(m => addMonths(m, 1))} aria-label="Next month" className="p-2 rounded-lg hover:bg-gray-100 cursor-pointer"><ChevronRight size={18} /></button>
         </div>
       </div>
       <div className="space-y-1">
@@ -325,10 +331,38 @@ function AgendaView({ projects, onNavigate }: { projects: Project[]; onNavigate:
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
+type CalendarView = 'month' | 'week' | 'agenda'
+const VIEWS: { key: CalendarView; label: string }[] = [
+  { key: 'month',  label: 'Month' },
+  { key: 'week',   label: 'Week' },
+  { key: 'agenda', label: 'Agenda' },
+]
+
+function isView(v: string | null): v is CalendarView {
+  return !!v && VIEWS.some(x => x.key === v)
+}
+
 export function CalendarPage() {
   const { data: projects = [] } = useProjects()
   const navigate = useNavigate()
-  const [view, setView] = useState<'month' | 'week' | 'agenda'>('month')
+  const [params, setParams] = useSearchParams()
+  const viewParam = params.get('view')
+  const view: CalendarView = isView(viewParam) ? viewParam : 'month'
+
+  // One cursor for all three views — switching Month → Week used to jump you
+  // back to today instead of keeping the week you were looking at.
+  const [current, setCurrent] = useState(() => new Date())
+
+  const setView = (next: CalendarView) => {
+    setParams(prev => {
+      const p = new URLSearchParams(prev)
+      if (next === 'month') p.delete('view')
+      else p.set('view', next)
+      return p
+    }, { replace: true })
+  }
+
+  const goToProject = useCallback((id: string) => navigate(`/projects/${id}`), [navigate])
 
   const today = new Date()
   const departingToday = projects.filter(p => p.delivery_date && format(parseISO(p.delivery_date), 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd'))
@@ -341,22 +375,21 @@ export function CalendarPage() {
       <div className="flex items-start gap-6">
         <div className="flex-1 min-w-0">
           {/* View toggle */}
-          <div className="flex gap-1 mb-4">
-            {([
-              { key: 'month', label: 'Month' },
-              { key: 'week',  label: 'Week' },
-              { key: 'agenda', label: 'Agenda', icon: List },
-            ] as const).map(({ key, label }) => (
-              <button key={key} onClick={() => setView(key)}
-                className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${view === key ? 'bg-gray-900 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+          <div className="flex gap-1 mb-4" role="group" aria-label="Calendar view">
+            {VIEWS.map(({ key, label }) => (
+              <button key={key} type="button" onClick={() => setView(key)}
+                aria-pressed={view === key}
+                className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors cursor-pointer ${
+                  view === key ? 'bg-gray-900 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
+                }`}>
                 {label}
               </button>
             ))}
           </div>
 
-          {view === 'month'  && <MonthView  projects={projects} onNavigate={id => navigate(`/projects/${id}`)} />}
-          {view === 'week'   && <WeekView   projects={projects} onNavigate={id => navigate(`/projects/${id}`)} />}
-          {view === 'agenda' && <AgendaView projects={projects} onNavigate={id => navigate(`/projects/${id}`)} />}
+          {view === 'month'  && <MonthView  projects={projects} current={current} setCurrent={setCurrent} onNavigate={goToProject} />}
+          {view === 'week'   && <WeekView   projects={projects} current={current} setCurrent={setCurrent} onNavigate={goToProject} />}
+          {view === 'agenda' && <AgendaView projects={projects} current={current} setCurrent={setCurrent} onNavigate={goToProject} />}
 
           <div className="flex flex-wrap gap-4 mt-3 text-xs text-gray-500">
             <span><span className="text-green-600 mr-1">↑</span>Kit departing</span>

@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { Plus, Pencil, Trash2, Mail, Phone, Search, AlertTriangle, History } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { supabase } from '../lib/supabase'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useProjectRevenue } from '../hooks/useRevenue'
 import { useClients, useCreateClient, useUpdateClient, useDeleteClient } from '../hooks/useClients'
 import { useProjects } from '../hooks/useProjects'
-import { useToast } from '../components/shared/Toast'
+import { useToast } from '../lib/toast-context'
+import { errorMessage } from '../lib/errors'
 import type { Client } from '../types'
 import { formatCurrency, calcProjectTotals } from '../lib/utils'
 import { Button } from '../components/shared/Button'
@@ -80,23 +80,21 @@ function ClientForm({ initial, onSave, onCancel }: {
 export function ClientsPage() {
   const { data: clients = [], isLoading } = useClients()
   const { data: allProjects = [] } = useProjects()
-  const { data: richProjects = [] } = useQuery({
-    queryKey: ['projects-with-lines-clients'],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('projects')
-        .select('id, client_id, status, overall_discount_pct, line_items:project_line_items(unit_price,quantity,days,discount_pct,is_component)')
-      if (error) throw error
-      return data as any[]
-    },
-    staleTime: 60_000,
-  })
+  const { data: richProjects = [] } = useProjectRevenue()
   const create = useCreateClient()
   const update = useUpdateClient()
   const del = useDeleteClient()
   const navigate = useNavigate()
 
-  const [search, setSearch] = useState('')
+  // Backed by the URL so global search can deep-link straight to a client.
+  const [params, setParams] = useSearchParams()
+  const search = params.get('q') ?? ''
+  const setSearch = (value: string) => setParams(prev => {
+    const next = new URLSearchParams(prev)
+    if (value) next.set('q', value)
+    else next.delete('q')
+    return next
+  }, { replace: true })
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Client | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<Client | null>(null)
@@ -109,7 +107,7 @@ export function ClientsPage() {
   )
 
   return (
-    <div className="p-6 max-w-4xl">
+    <div className="p-3 md:p-6 max-w-4xl">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Clients</h1>
@@ -175,8 +173,8 @@ export function ClientsPage() {
                 setShowForm(false)
                 toast('Client added')
               }
-            } catch (e: any) {
-              toast(e?.message || 'Save failed', 'error')
+            } catch (e) {
+              toast(errorMessage(e, 'Save failed'), 'error')
             }
           }}
           onCancel={() => { setShowForm(false); setEditing(null) }}
@@ -192,11 +190,7 @@ export function ClientsPage() {
             .sort((a, b) => (b.created_at > a.created_at ? 1 : -1))
           const totalSpend = richProjects
             .filter(p => p.client_id === viewingHistory.id && ['confirmed', 'invoiced', 'completed'].includes(p.status))
-            .reduce((s, p) => {
-              const lines = (p.line_items || []) as any[]
-              const { subtotal } = calcProjectTotals(lines, p.overall_discount_pct ?? 0)
-              return s + subtotal
-            }, 0)
+            .reduce((s, p) => s + calcProjectTotals(p.line_items ?? [], p.overall_discount_pct ?? 0).subtotal, 0)
           return (
             <div className="space-y-2">
               {totalSpend > 0 && (
