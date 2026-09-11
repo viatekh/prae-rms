@@ -51,10 +51,16 @@ function blankProject(): Omit<NewProject, 'project_number' | 'name' | 'client_id
   }
 }
 
+interface NewProjectInput {
+  project: Omit<NewProject, 'project_number'>
+  /** Set only when the user overrode the auto-generated reference. */
+  customReference: string | null
+}
+
 function NewProjectModal({ open, onClose, onCreate, creating }: {
   open: boolean
   onClose: () => void
-  onCreate: (project: Omit<NewProject, 'project_number'>) => void
+  onCreate: (input: NewProjectInput) => void
   creating: boolean
 }) {
   const { data: nextNumber } = useNextProjectNumber()
@@ -102,7 +108,10 @@ function NewProjectModal({ open, onClose, onCreate, creating }: {
       <form
         onSubmit={e => {
           e.preventDefault()
-          onCreate({ ...blankProject(), name: name.trim(), client_id: clientId || null })
+          onCreate({
+            project: { ...blankProject(), name: name.trim(), client_id: clientId || null },
+            customReference: refEdited ? reference.trim() || null : null,
+          })
         }}
         className="space-y-4"
       >
@@ -110,7 +119,7 @@ function NewProjectModal({ open, onClose, onCreate, creating }: {
           placeholder="e.g. Summer Party at Brixton Academy" autoFocus />
         <Input label="Reference" value={reference} onChange={e => { setRef(e.target.value); setRefEdited(true) }}
           placeholder="Auto-generated from name"
-          hint="A project number is reserved automatically on create; this is your own label." />
+          hint="Defaults to your project's initials plus the next number. Edit it to use your own." />
 
         <div className="flex flex-col gap-1">
           <div className="flex gap-1.5 items-end">
@@ -214,11 +223,15 @@ export function ProjectsPage() {
     })
   }, [projects, search, statusFilter])
 
-  const handleCreate = async (data: Omit<NewProject, 'project_number'>) => {
+  const handleCreate = async ({ project, customReference }: NewProjectInput) => {
     try {
-      // Reserve the number first so two people creating at once can't collide.
-      const projectNumber = await reserveProjectNumber(qc)
-      const created = await createProject.mutateAsync({ ...data, project_number: projectNumber })
+      // Reserve from the shared counter first, so two people creating at the
+      // same time can't be handed the same number.
+      const reserved = await reserveProjectNumber(qc)
+      // A reference the user typed wins; otherwise derive one from the project
+      // name and the number just reserved.
+      const projectNumber = customReference || autoRef(project.name, reserved)
+      const created = await createProject.mutateAsync({ ...project, project_number: projectNumber })
       setShowNew(false)
       navigate(`/projects/${created.id}`)
     } catch (e) {
