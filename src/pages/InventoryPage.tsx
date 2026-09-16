@@ -152,7 +152,12 @@ function ItemMaintenanceLog({ itemId }: { itemId: string }) {
         {logs.map(log => (
           <div key={log.id} className="flex items-start gap-2 text-xs bg-white border border-gray-200 rounded px-2 py-1.5">
             <span className="text-gray-400 shrink-0 tabular-nums">{format(new Date(log.created_at), 'd MMM yy')}</span>
-            <span className="flex-1 text-gray-700">{log.note}</span>
+            <span className="flex-1 text-gray-700">
+              {log.note}
+              {log.author && (
+                <span className="text-gray-400"> — {log.author.full_name || log.author.email}</span>
+              )}
+            </span>
             <button onClick={() => deleteLog.mutateAsync({ id: log.id, item_id: itemId })}
               className="text-gray-300 hover:text-red-500 shrink-0"><Trash2 size={10} /></button>
           </div>

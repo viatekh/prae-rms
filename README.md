@@ -22,9 +22,18 @@ VITE_SUPABASE_ANON_KEY=<anon key>
 
 ### Database
 
-Run `supabase/schema.sql` in the Supabase SQL editor to create the tables, then
-`supabase/setup.sql` for seed data. `supabase/migrate.sql` holds incremental
-changes and `supabase/drop_all.sql` tears everything down.
+Run these in the Supabase SQL editor, in order:
+
+1. `supabase/schema.sql` — core tables
+2. `supabase/setup.sql` — seed data, profiles, base RLS
+3. `supabase/migrate-002.sql` — activity/crew/maintenance tables, line-item rate
+   columns, role-aware RLS, and `delete_user()`
+
+`supabase/migrate.sql` holds older incremental changes and
+`supabase/drop_all.sql` tears everything down.
+
+**Do not leave any table on `using (true)`.** The anon key ships inside the
+browser bundle, so `true` makes that table world-readable and world-writable.
 
 For new users to sign in immediately, disable **Enable email confirmations**
 under Authentication → Settings in the Supabase dashboard.
@@ -36,6 +45,7 @@ under Authentication → Settings in the Supabase dashboard.
 | `npm run dev` | Dev server with HMR |
 | `npm run build` | Type-check (`tsc -b`) then production build |
 | `npm run lint` | ESLint over `src/` |
+| `npm test` | Vitest over the pure logic modules |
 | `npm run preview` | Serve the production build locally |
 
 ## How it fits together
@@ -63,6 +73,17 @@ Key conventions:
   `update`, so the update hooks destructure them off.
 - **List views keep filters in the URL** (`?q=`, `?status=`, `?tab=`, `?view=`)
   so a view is shareable and survives navigating into a record and back.
+
+### Pricing
+
+Items carry a daily rate plus optional weekly and monthly rates. A line is
+charged the cheapest way of making up its duration from whichever rates are
+set — straight days, whole blocks rounded up, or blocks plus leftover days —
+and the kit list and quote show which was used ("1 wk + 3 days"). A line with no
+weekly or monthly rate is billed at `days x day rate`, exactly as before.
+
+Lines snapshot all three rates when they are added, so re-pricing the catalogue
+never rewrites a quote that has already gone out.
 
 ### Availability
 

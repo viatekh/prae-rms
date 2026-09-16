@@ -2,22 +2,10 @@ import { useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
 import { supabase } from '../lib/supabase'
 import type { Item, ProjectStatus } from '../types'
+import { toDay, overlaps } from '../lib/dates'
 
 /** Statuses that hold stock — a draft doesn't reserve anything. */
 const COMMITTED_STATUSES: ProjectStatus[] = ['sent', 'confirmed', 'invoiced']
-
-/** Dates arrive as either `YYYY-MM-DD` or a full ISO timestamp; compare day-precision only. */
-function toDay(value: string | null | undefined): string | null {
-  return value ? value.slice(0, 10) : null
-}
-
-function overlaps(
-  startA: string | null, endA: string | null,
-  startB: string | null, endB: string | null,
-): boolean {
-  if (!startA || !endA || !startB || !endB) return false
-  return startA <= endB && endA >= startB
-}
 
 interface BookingRow {
   item_id: string | null

@@ -162,15 +162,22 @@ alter table projects enable row level security;
 alter table project_line_items enable row level security;
 alter table settings enable row level security;
 
-create policy "allow all" on categories for all using (true) with check (true);
-create policy "allow all" on items for all using (true) with check (true);
-create policy "allow all" on item_components for all using (true) with check (true);
-create policy "allow all" on packages for all using (true) with check (true);
-create policy "allow all" on package_items for all using (true) with check (true);
-create policy "allow all" on clients for all using (true) with check (true);
-create policy "allow all" on projects for all using (true) with check (true);
-create policy "allow all" on project_line_items for all using (true) with check (true);
-create policy "allow all" on settings for all using (true) with check (true);
+-- NOTE: these policies only require a logged-in user. Run setup.sql (or
+-- migrate-002.sql) afterwards to replace them with role-aware policies.
+-- Never leave a table on `using (true)`: the anon key ships in the browser
+-- bundle, so `true` means the whole table is world-readable and world-writable.
+do $$ declare tbl text; begin
+  foreach tbl in array array[
+    'categories','items','item_components','packages','package_items',
+    'clients','projects','project_line_items','settings'
+  ] loop
+    execute format('drop policy if exists "allow all" on %I', tbl);
+    execute format(
+      'create policy "auth required" on %I for all
+       using (auth.uid() is not null)
+       with check (auth.uid() is not null)', tbl);
+  end loop;
+end $$;
 
 -- ============================================================
 -- Migration (run if upgrading from a previous schema version)

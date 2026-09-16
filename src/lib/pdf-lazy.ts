@@ -1,4 +1,7 @@
-import type { Project, Settings, LineItemDraft } from '../types'
+import type { Project, Settings, LineItemDraft, Item } from '../types'
+
+/** The item fields the picking list prints. */
+type PickingItemInfo = Pick<Item, 'id' | 'item_id' | 'serial_number' | 'is_subhire' | 'subhire_owner'>
 
 /**
  * @react-pdf/renderer is ~1.8MB and is only needed when someone actually asks
@@ -14,7 +17,7 @@ export async function generatePickingListPDF(
   project: Project,
   lines: LineItemDraft[],
   settings: Settings | undefined,
-  items: { id: string; item_id: string }[] = [],
+  items: PickingItemInfo[] = [],
 ) {
   return (await loadPdf()).generatePickingListPDF(project, lines, settings, items)
 }

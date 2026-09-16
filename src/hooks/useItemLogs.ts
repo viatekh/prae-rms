@@ -8,7 +8,7 @@ export function useItemLogs(itemId: string) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('item_logs')
-        .select('*')
+        .select('*, author:profiles(full_name, email)')
         .eq('item_id', itemId)
         .order('created_at', { ascending: false })
       if (error) throw error
@@ -22,7 +22,10 @@ export function useAddItemLog() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ item_id, note }: { item_id: string; note: string }) => {
-      const { data, error } = await supabase.from('item_logs').insert({ item_id, note }).select().single()
+      const { data: auth } = await supabase.auth.getUser()
+      const { data, error } = await supabase.from('item_logs')
+        .insert({ item_id, note, author_id: auth.user?.id ?? null })
+        .select().single()
       if (error) throw error
       return data as ItemLog
     },

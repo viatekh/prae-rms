@@ -1,7 +1,7 @@
 import { pdf, Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { DocumentProps } from '@react-pdf/renderer'
 import type { Project, Settings, LineItemDraft } from '../types'
-import { calcLineTotal, calcProjectTotals } from './utils'
+import { calcLineTotal, calcProjectTotals, lineRateBasis } from './utils'
 import { format, parseISO } from 'date-fns'
 
 const styles = StyleSheet.create({
@@ -148,17 +148,23 @@ function QuoteDocument({ project, lines, settings }: { project: Project; lines: 
         </View>
 
         {Object.entries(grouped).map(([cat, catLines]) => {
-          const catTotal = catLines.reduce((s, l) => s + calcLineTotal(l.unit_price, l.quantity, l.days, l.discount_pct), 0)
+          const catTotal = catLines.reduce((s, l) => s + calcLineTotal(l), 0)
           return (
             <View key={cat}>
               <Text style={styles.sectionTitle}>{cat}</Text>
               {catLines.map((line, i) => {
-                const lineTotal = calcLineTotal(line.unit_price, line.quantity, line.days, line.discount_pct)
+                const lineTotal = calcLineTotal(line)
+                const rate = lineRateBasis(line)
                 const comps = allComponents.filter(c => c.item_id === line.item_id || c.package_id === line.package_id)
                 return (
                   <View key={i}>
                     <View style={styles.tableRow}>
-                      <Text style={styles.col}>{line.description}</Text>
+                      <View style={styles.col}>
+                        <Text>{line.description}</Text>
+                        {rate.basis !== 'day' && (
+                          <Text style={{ fontSize: 7, color: '#777' }}>Charged as {rate.label}</Text>
+                        )}
+                      </View>
                       <Text style={[styles.colSm, styles.faint]}>{line.line_type === 'rental' ? 'Rental' : 'Service'}</Text>
                       <Text style={styles.colSm}>{line.quantity}</Text>
                       <Text style={styles.colSm}>{line.days}</Text>
@@ -255,7 +261,19 @@ function QuoteDocument({ project, lines, settings }: { project: Project; lines: 
   )
 }
 
-function PickingListDocument({ project, lines, settings, itemCodeMap }: { project: Project; lines: LineItemDraft[]; settings: Settings | undefined; itemCodeMap: Map<string, string> }) {
+export interface PickingItemInfo {
+  item_id: string
+  serial_number?: string | null
+  is_subhire?: boolean
+  subhire_owner?: string | null
+}
+
+function PickingListDocument({ project, lines, settings, itemInfo }: {
+  project: Project
+  lines: LineItemDraft[]
+  settings: Settings | undefined
+  itemInfo: Map<string, PickingItemInfo>
+}) {
   const grouped: Record<string, LineItemDraft[]> = {}
   lines.forEach(l => {
     const cat = l.category || 'Misc'
@@ -293,25 +311,37 @@ function PickingListDocument({ project, lines, settings, itemCodeMap }: { projec
           <Text style={[styles.colId, { fontFamily: 'Helvetica-Bold', fontSize: 8 }]}>ID</Text>
           <Text style={[styles.col, { fontFamily: 'Helvetica-Bold', fontSize: 8 }]}>Item / component</Text>
           <Text style={[styles.colSm, { fontFamily: 'Helvetica-Bold', fontSize: 8 }]}>Qty</Text>
-          <Text style={[{ flex: 1, fontFamily: 'Helvetica-Bold', fontSize: 8 }]}>Notes</Text>
+          <Text style={[{ flex: 1, fontFamily: 'Helvetica-Bold', fontSize: 8 }]}>Serial / owner</Text>
         </View>
 
         {Object.entries(grouped).map(([cat, catLines]) => (
           <View key={cat}>
             <Text style={styles.sectionTitle}>{cat}</Text>
-            {catLines.map((line, i) => (
-              <View key={i} style={line.is_component ? styles.componentRow : styles.tableRow}>
-                <Text style={[styles.colCheck, { color: '#ccc' }]}>□</Text>
-                <Text style={[styles.colId, { color: line.is_component ? '#ccc' : '#555', fontSize: 7 }]}>
-                  {!line.is_component && line.item_id ? (itemCodeMap.get(line.item_id) || '') : ''}
-                </Text>
-                <Text style={[styles.col, line.is_component ? styles.faint : { fontFamily: 'Helvetica-Bold' }]}>
-                  {line.description}
-                </Text>
-                <Text style={[styles.colSm, line.is_component ? styles.faint : {}]}>{line.quantity}</Text>
-                <Text style={{ flex: 1, color: '#aaa', fontSize: 7 }}></Text>
-              </View>
-            ))}
+            {catLines.map((line, i) => {
+              const info = !line.is_component && line.item_id ? itemInfo.get(line.item_id) : undefined
+              return (
+                <View key={i} style={line.is_component ? styles.componentRow : styles.tableRow}>
+                  <Text style={[styles.colCheck, { color: '#ccc' }]}>□</Text>
+                  <Text style={[styles.colId, { color: line.is_component ? '#ccc' : '#555', fontSize: 7 }]}>
+                    {info?.item_id ?? ''}
+                  </Text>
+                  <Text style={[styles.col, line.is_component ? styles.faint : { fontFamily: 'Helvetica-Bold' }]}>
+                    {line.description}
+                  </Text>
+                  <Text style={[styles.colSm, line.is_component ? styles.faint : {}]}>{line.quantity}</Text>
+                  <View style={{ flex: 1 }}>
+                    {info?.serial_number && (
+                      <Text style={{ color: '#555', fontSize: 7 }}>S/N {info.serial_number}</Text>
+                    )}
+                    {info?.is_subhire && (
+                      <Text style={{ color: '#b45309', fontSize: 7, fontFamily: 'Helvetica-Bold' }}>
+                        SUB-HIRE{info.subhire_owner ? ` — ${info.subhire_owner}` : ''} · return to owner
+                      </Text>
+                    )}
+                  </View>
+                </View>
+              )
+            })}
           </View>
         ))}
 
@@ -432,10 +462,15 @@ export async function generateDeliveryDocketPDF(project: Project, lines: LineIte
   )
 }
 
-export async function generatePickingListPDF(project: Project, lines: LineItemDraft[], settings: Settings | undefined, items: { id: string; item_id: string }[] = []) {
-  const itemCodeMap = new Map(items.map(i => [i.id, i.item_id]))
+export async function generatePickingListPDF(
+  project: Project,
+  lines: LineItemDraft[],
+  settings: Settings | undefined,
+  items: (PickingItemInfo & { id: string })[] = [],
+) {
+  const itemInfo = new Map(items.map(i => [i.id, i]))
   await downloadPDF(
-    <PickingListDocument project={project} lines={lines} settings={settings} itemCodeMap={itemCodeMap} /> as React.ReactElement<DocumentProps>,
+    <PickingListDocument project={project} lines={lines} settings={settings} itemInfo={itemInfo} /> as React.ReactElement<DocumentProps>,
     `${project.project_number}-picking-list.pdf`
   )
 }

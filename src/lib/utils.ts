@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from 'clsx'
 import type { PricedLine } from '../types'
+import { rateForDuration } from './pricing'
 import { twMerge } from 'tailwind-merge'
 
 export function cn(...inputs: ClassValue[]) {
@@ -13,10 +14,27 @@ export function formatCurrency(amount: number): string {
   return GBP.format(Number.isFinite(amount) ? amount : 0)
 }
 
-export function calcLineTotal(unitPrice: number, quantity: number, days: number, discountPct: number): number {
-  const gross = (unitPrice || 0) * (quantity || 0) * (days || 0)
-  const total = gross * (1 - (discountPct || 0) / 100)
+/**
+ * Charge for one line. Applies the item's weekly/monthly rates when they are
+ * set and work out cheaper than counting days; falls back to days x day rate
+ * otherwise, which is what every line without those rates does.
+ */
+export function calcLineTotal(line: PricedLine): number {
+  const { unitTotal } = rateForDuration(
+    { day_price: line.unit_price || 0, week_price: line.week_price, month_price: line.month_price },
+    line.days,
+  )
+  const gross = unitTotal * (line.quantity || 0)
+  const total = gross * (1 - (line.discount_pct || 0) / 100)
   return Number.isFinite(total) ? total : 0
+}
+
+/** How a line's duration was charged, for display next to the total. */
+export function lineRateBasis(line: PricedLine) {
+  return rateForDuration(
+    { day_price: line.unit_price || 0, week_price: line.week_price, month_price: line.month_price },
+    line.days,
+  )
 }
 
 export function calcProjectTotals(
@@ -25,7 +43,7 @@ export function calcProjectTotals(
 ) {
   const linesSubtotal = lineItems
     .filter(l => !l.is_component)
-    .reduce((sum, l) => sum + calcLineTotal(l.unit_price, l.quantity, l.days, l.discount_pct), 0)
+    .reduce((sum, l) => sum + calcLineTotal(l), 0)
   const overallDiscount = linesSubtotal * (overallDiscountPct / 100)
   const subtotal = linesSubtotal - overallDiscount
   return { subtotal, linesSubtotal, overallDiscount }

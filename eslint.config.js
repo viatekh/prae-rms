@@ -31,6 +31,11 @@ export default defineConfig([
     },
   },
   {
+    // Vitest globals are imported explicitly; tests just need node types.
+    files: ['**/*.test.ts'],
+    rules: { '@typescript-eslint/no-explicit-any': 'off' },
+  },
+  {
     // lib/ holds @react-pdf document components, which are never rendered into
     // the DOM tree and so have nothing to fast-refresh.
     files: ['src/lib/**/*.{ts,tsx}'],

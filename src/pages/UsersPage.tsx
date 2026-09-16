@@ -43,12 +43,13 @@ export function UsersPage() {
   }
 
   const handleDelete = async (profile: Profile) => {
-    // Deletes the profile row; the auth.users row cascades via the DB trigger.
+    // Goes through delete_user(), which removes the auth.users row and lets the
+    // profile cascade. Deleting only the profile row left the login working.
     setBusyId(profile.id)
-    const { error } = await supabase.from('profiles').delete().eq('id', profile.id)
+    const { error } = await supabase.rpc('delete_user', { target_id: profile.id })
     setBusyId(null)
     if (error) { toast(error.message, 'error'); return }
-    toast('User removed')
+    toast(`${profile.email} removed`)
     setConfirmDelete(null)
     reload()
   }
@@ -119,7 +120,8 @@ export function UsersPage() {
           <div className="flex gap-3 items-start">
             <AlertTriangle size={20} className="text-red-500 shrink-0 mt-0.5" />
             <p className="text-sm text-gray-700">
-              Remove <strong>{confirmDelete?.email}</strong>? They will no longer be able to log in. This cannot be undone.
+              Remove <strong>{confirmDelete?.email}</strong>? Their login is deleted and they lose access
+              immediately. This cannot be undone.
             </p>
           </div>
           <div className="flex justify-end gap-2">

@@ -8,7 +8,7 @@ export function useProjectLogs(projectId: string) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('project_logs')
-        .select('*')
+        .select('*, author:profiles(full_name, email)')
         .eq('project_id', projectId)
         .order('created_at', { ascending: false })
       if (error) throw error
@@ -22,7 +22,11 @@ export function useAddProjectLog() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ project_id, message }: { project_id: string; message: string }) => {
-      const { data, error } = await supabase.from('project_logs').insert({ project_id, message }).select().single()
+      // Stamp the author so the log says who wrote what.
+      const { data: auth } = await supabase.auth.getUser()
+      const { data, error } = await supabase.from('project_logs')
+        .insert({ project_id, message, author_id: auth.user?.id ?? null })
+        .select().single()
       if (error) throw error
       return data as ProjectLog
     },

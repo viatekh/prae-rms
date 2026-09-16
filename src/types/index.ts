@@ -71,10 +71,17 @@ export interface Client {
   created_at: string
 }
 
+export interface LogAuthor {
+  full_name: string | null
+  email: string
+}
+
 export interface ItemLog {
   id: string
   item_id: string
   note: string
+  author_id: string | null
+  author?: LogAuthor | null
   created_at: string
 }
 
@@ -82,6 +89,8 @@ export interface ProjectLog {
   id: string
   project_id: string
   message: string
+  author_id: string | null
+  author?: LogAuthor | null
   created_at: string
 }
 
@@ -137,7 +146,11 @@ export interface ProjectLineItem {
   category: string
   quantity: number
   days: number
+  /** Daily rate, snapshotted when the line was added. */
   unit_price: number
+  /** Weekly / monthly rates snapshotted alongside unit_price, when the item has them. */
+  week_price: number | null
+  month_price: number | null
   discount_pct: number
   sort_order: number
   is_component: boolean
@@ -166,6 +179,8 @@ export type LineItemDraft = Omit<ProjectLineItem, 'id' | 'item' | 'package' | 'c
 /** The subset of a line item that revenue maths needs. */
 export interface PricedLine {
   unit_price: number
+  week_price?: number | null
+  month_price?: number | null
   quantity: number
   days: number
   discount_pct: number

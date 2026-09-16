@@ -18,7 +18,7 @@ import { Input, Textarea } from '../components/shared/Input'
 
 import { Modal } from '../components/shared/Modal'
 import { StatusBadge, SubhireBadge } from '../components/shared/Badge'
-import { formatCurrency, calcLineTotal, calcProjectTotals } from '../lib/utils'
+import { formatCurrency, calcLineTotal, calcProjectTotals, lineRateBasis } from '../lib/utils'
 import { generateQuotePDF, generatePickingListPDF, generateDeliveryDocketPDF } from '../lib/pdf-lazy'
 import { useToast } from '../lib/toast-context'
 import { Select } from '../components/shared/Select'
@@ -69,6 +69,8 @@ function ProjectDetailsPanel({ project, clients, onStatusChange, onSave, onRefre
     expiry_date: project.expiry_date?.slice(0, 10) || '',
     po_number: project.po_number || '',
     overall_discount_pct: String(project.overall_discount_pct ?? 0),
+    deposit_amount: project.deposit_amount != null ? String(project.deposit_amount) : '',
+    deposit_paid: project.deposit_paid ? 'yes' : 'no',
     damage_notes: project.damage_notes || '',
     notes: project.notes || '',
     client_notes: project.client_notes || '',
@@ -100,6 +102,8 @@ function ProjectDetailsPanel({ project, clients, onStatusChange, onSave, onRefre
     expiry_date: f.expiry_date || null,
     po_number: f.po_number || null,
     overall_discount_pct: parseFloat(f.overall_discount_pct) || 0,
+    deposit_amount: f.deposit_amount.trim() === '' ? null : (parseFloat(f.deposit_amount) || 0),
+    deposit_paid: f.deposit_paid === 'yes',
     damage_notes: f.damage_notes || null,
     notes: f.notes || null,
     client_notes: f.client_notes || null,
@@ -321,6 +325,16 @@ function ProjectDetailsPanel({ project, clients, onStatusChange, onSave, onRefre
           </div>
         </div>
         <Input label="Overall discount %" type="number" min="0" max="100" step="0.01" value={form.overall_discount_pct} onChange={e => set('overall_discount_pct', e.target.value)} />
+        <div className="grid grid-cols-2 gap-3 items-end">
+          <Input label="Deposit required (£)" type="number" min="0" step="0.01" placeholder="None"
+            value={form.deposit_amount} onChange={e => set('deposit_amount', e.target.value)} />
+          <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer pb-2">
+            <input type="checkbox" className="rounded" checked={form.deposit_paid === 'yes'}
+              disabled={!form.deposit_amount.trim()}
+              onChange={e => set('deposit_paid', e.target.checked ? 'yes' : 'no')} />
+            Deposit paid
+          </label>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
@@ -421,6 +435,8 @@ export function ProjectDetailPage() {
     quantity: l.quantity,
     days: l.days,
     unit_price: l.unit_price,
+    week_price: l.week_price,
+    month_price: l.month_price,
     discount_pct: l.discount_pct,
     sort_order: l.sort_order,
     is_component: l.is_component,
@@ -491,6 +507,8 @@ export function ProjectDetailPage() {
       quantity: qty,
       days,
       unit_price: item.day_price,
+      week_price: item.week_price,
+      month_price: item.month_price,
       discount_pct: 0,
       sort_order: baseOrder,
       is_component: false,
@@ -506,6 +524,8 @@ export function ProjectDetailPage() {
       quantity: c.quantity * qty,
       days,
       unit_price: 0,
+      week_price: null,
+      month_price: null,
       discount_pct: 0,
       sort_order: baseOrder + ci + 1,
       is_component: true,
@@ -527,6 +547,8 @@ export function ProjectDetailPage() {
       quantity: qty,
       days,
       unit_price: pkg.day_price,
+      week_price: pkg.week_price,
+      month_price: pkg.month_price,
       discount_pct: 0,
       sort_order: baseOrder,
       is_component: false,
@@ -546,6 +568,8 @@ export function ProjectDetailPage() {
         quantity: pi.quantity * qty,
         days,
         unit_price: 0,
+        week_price: null,
+        month_price: null,
         discount_pct: 0,
         sort_order: baseOrder + piIdx * 10 + 1,
         is_component: true,
@@ -561,6 +585,8 @@ export function ProjectDetailPage() {
         quantity: c.quantity * pi.quantity * qty,
         days,
         unit_price: 0,
+        week_price: null,
+        month_price: null,
         discount_pct: 0,
         sort_order: baseOrder + piIdx * 10 + ci + 2,
         is_component: true,
@@ -585,6 +611,8 @@ export function ProjectDetailPage() {
         quantity: qty,
         days,
         unit_price: price,
+        week_price: null,
+        month_price: null,
         discount_pct: 0,
         sort_order: base.length,
         is_component: false,
@@ -834,7 +862,8 @@ export function ProjectDetailPage() {
                       <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{cat || 'Uncategorised'}</span>
                     </div>
                     {catLines.map(({ line, index: lineIdx, children }) => {
-                      const total = calcLineTotal(line.unit_price, line.quantity, line.days, line.discount_pct)
+                      const total = calcLineTotal(line)
+                      const rate = lineRateBasis(line)
                       const subhireItem = line.item_id ? itemsById.get(line.item_id) : null
                       const avail = line.item_id ? availabilityMap.get(line.item_id) : undefined
                       const thisProjectQty = line.item_id ? (qtyByItemId.get(line.item_id) ?? 0) : 0
@@ -845,10 +874,17 @@ export function ProjectDetailPage() {
                         <div key={lineIdx} className={overbooked ? 'bg-red-50/60' : ''}>
                           {/* Desktop row */}
                           <div className={`hidden md:grid grid-cols-[1fr_60px_60px_80px_60px_70px_56px] gap-2 px-4 py-2 items-center border-b border-gray-50 hover:bg-gray-50`}>
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <span className="text-sm text-gray-900 truncate">{line.description}</span>
-                              {subhireItem?.is_subhire && <SubhireBadge />}
-                              {overbooked && <span className="text-xs text-red-600 shrink-0">⚠ Over stock</span>}
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="text-sm text-gray-900 truncate">{line.description}</span>
+                                {subhireItem?.is_subhire && <SubhireBadge />}
+                                {overbooked && <span className="text-xs text-red-600 shrink-0">⚠ Over stock</span>}
+                              </div>
+                              {rate.basis !== 'day' && (
+                                <span className="text-xs text-green-700" title="Charged using this item's weekly/monthly rate">
+                                  {rate.label} rate
+                                </span>
+                              )}
                             </div>
                             <input className={`text-sm text-right border-0 bg-transparent focus:outline-none w-full ${overbooked ? 'text-red-600 font-medium' : ''}`}
                               type="number" min="1" max={effectiveAvail ?? undefined} value={line.quantity}
@@ -876,6 +912,9 @@ export function ProjectDetailPage() {
                                 <span className="text-sm font-medium text-gray-900">{line.description}</span>
                                 {subhireItem?.is_subhire && <SubhireBadge />}
                                 {overbooked && <span className="ml-1 text-xs text-red-600">⚠ Over stock</span>}
+                                {rate.basis !== 'day' && (
+                                  <span className="block text-xs text-green-700">{rate.label} rate</span>
+                                )}
                               </div>
                               <div className="flex items-center gap-1 shrink-0">
                                 <button onClick={() => cloneLine(lineIdx)} className="text-gray-300 hover:text-gray-600 p-1"><Copy size={13} /></button>
@@ -1272,7 +1311,12 @@ function ProjectActivityLog({ projectId }: { projectId: string }) {
           {logs.map(log => (
             <div key={log.id} className="flex items-start gap-2 text-xs">
               <span className="text-gray-400 shrink-0 tabular-nums pt-0.5">{format(new Date(log.created_at), 'd MMM HH:mm')}</span>
-              <span className="flex-1 text-gray-700">{log.message}</span>
+              <span className="flex-1 text-gray-700">
+                {log.message}
+                {log.author && (
+                  <span className="text-gray-400"> — {log.author.full_name || log.author.email}</span>
+                )}
+              </span>
               <button onClick={() => deleteLog.mutateAsync({ id: log.id, project_id: projectId })}
                 className="text-gray-300 hover:text-red-500 shrink-0 pt-0.5"><Trash2 size={10} /></button>
             </div>
