@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { format, parseISO, isToday, isTomorrow, startOfMonth, endOfMonth } from 'date-fns'
-import { Truck, TruckIcon, AlertCircle, TrendingUp, Package, ChevronRight } from 'lucide-react'
+import { Truck, TruckIcon, AlertCircle, TrendingUp, Package, ChevronRight, Plus, FileText } from 'lucide-react'
 import { useProjects } from '../hooks/useProjects'
 import { StatusBadge } from '../components/shared/Badge'
 import { formatCurrency, calcProjectTotals } from '../lib/utils'
@@ -52,15 +52,25 @@ export function DashboardPage() {
       .reduce((sum, p) => sum + calcProjectTotals(p.line_items ?? [], p.overall_discount_pct ?? 0).subtotal, 0)
   }, [richProjects, monthStart, monthEnd])
 
+  const drafts = useMemo(() =>
+    allProjects.filter(p => p.status === 'draft'),
+    [allProjects])
+
   const pendingQuotes = useMemo(() =>
     allProjects.filter(p => p.status === 'sent'),
     [allProjects])
 
   return (
     <div className="p-3 md:p-6 max-w-5xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <p className="text-sm text-gray-500 mt-0.5">{format(today, 'EEEE d MMMM yyyy')}</p>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+          <p className="text-sm text-gray-500 mt-0.5">{format(today, 'EEEE d MMMM yyyy')}</p>
+        </div>
+        <Link to="/projects?new=1"
+          className="inline-flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg bg-gray-900 text-white hover:bg-gray-700 transition-colors">
+          <Plus size={16} />New project
+        </Link>
       </div>
 
       {/* Stats row */}
@@ -71,18 +81,21 @@ export function DashboardPage() {
           icon={<Truck size={18} className="text-blue-600" />}
           color="blue"
           urgent={departuresToday.length > 0}
+          to="/calendar"
         />
         <StatCard
           label="Returns today"
           value={returnsToday.length}
           icon={<TruckIcon size={18} className="text-green-600" />}
           color="green"
+          to="/calendar"
         />
         <StatCard
           label="Kits out"
           value={inFlight.length}
           icon={<Package size={18} className="text-orange-600" />}
           color="orange"
+          to="/projects?status=confirmed"
         />
         <StatCard
           label={`Revenue ${format(today, 'MMM')}`}
@@ -90,6 +103,7 @@ export function DashboardPage() {
           icon={<TrendingUp size={18} className="text-purple-600" />}
           color="purple"
           isText
+          to="/reports"
         />
       </div>
 
@@ -147,28 +161,43 @@ export function DashboardPage() {
         </Section>
       )}
 
-      {departuresToday.length === 0 && returnsToday.length === 0 && inFlight.length === 0 && overdueCollections.length === 0 && (
+      {drafts.length > 0 && (
+        <Section title="Drafts to finish" icon={<FileText size={15} className="text-gray-400" />}>
+          {drafts.slice(0, 5).map(p => (
+            <ProjectRow key={p.id} project={p} detail={p.event_date ? format(parseISO(p.event_date), 'd MMM') : 'No date'} />
+          ))}
+          {drafts.length > 5 && (
+            <Link to="/projects?status=draft" className="block px-4 py-2.5 text-xs text-gray-500 hover:bg-gray-50">
+              View all {drafts.length} drafts
+            </Link>
+          )}
+        </Section>
+      )}
+
+      {departuresToday.length === 0 && returnsToday.length === 0 && departuresTomorrow.length === 0 &&
+        inFlight.length === 0 && overdueCollections.length === 0 && pendingQuotes.length === 0 && drafts.length === 0 && (
         <div className="text-center py-16 text-gray-400">
-          <p className="text-sm">Nothing on today — enjoy the quiet.</p>
+          <p className="text-sm">Nothing needs attention right now.</p>
         </div>
       )}
     </div>
   )
 }
 
-function StatCard({ label, value, icon, color, urgent, isText }: {
+function StatCard({ label, value, icon, color, urgent, isText, to }: {
   label: string
   value: number | string
   icon: React.ReactNode
   color: string
   urgent?: boolean
   isText?: boolean
+  to: string
 }) {
   const bg: Record<string, string> = {
     blue: 'bg-blue-50', green: 'bg-green-50', orange: 'bg-orange-50', purple: 'bg-purple-50',
   }
   return (
-    <div className={`rounded-xl border border-gray-200 bg-white p-4 ${urgent ? 'ring-2 ring-blue-400' : ''}`}>
+    <Link to={to} className={`block rounded-xl border border-gray-200 bg-white p-4 hover:border-gray-400 transition-colors ${urgent ? 'ring-2 ring-blue-400' : ''}`}>
       <div className="flex items-start justify-between">
         <p className="text-xs text-gray-500">{label}</p>
         <div className={`p-1.5 rounded-lg ${bg[color]}`}>{icon}</div>
@@ -176,7 +205,7 @@ function StatCard({ label, value, icon, color, urgent, isText }: {
       <p className={`mt-2 font-bold text-gray-900 ${isText ? 'text-lg' : 'text-3xl'}`}>
         {value}
       </p>
-    </div>
+    </Link>
   )
 }
 

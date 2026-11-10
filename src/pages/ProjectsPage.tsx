@@ -57,8 +57,9 @@ interface NewProjectInput {
   customReference: string | null
 }
 
-function NewProjectModal({ open, onClose, onCreate, creating }: {
+function NewProjectModal({ open, onClose, onCreate, creating, initialClientId = '' }: {
   open: boolean
+  initialClientId?: string
   onClose: () => void
   onCreate: (input: NewProjectInput) => void
   creating: boolean
@@ -68,7 +69,9 @@ function NewProjectModal({ open, onClose, onCreate, creating }: {
   const createClient = useCreateClient()
   const toast = useToast()
   const [name, setName] = useState('')
-  const [clientId, setClientId] = useState('')
+  // null = untouched, so a client passed in by the link applies until the user picks one.
+  const [pickedClientId, setClientId] = useState<string | null>(null)
+  const clientId = pickedClientId ?? initialClientId
   const [ref, setRef] = useState('')
   const [refEdited, setRefEdited] = useState(false)
   const [showNewClient, setShowNewClient] = useState(false)
@@ -80,7 +83,7 @@ function NewProjectModal({ open, onClose, onCreate, creating }: {
   const reference = refEdited ? ref : (nextNumber ? autoRef(name, nextNumber) : '')
 
   const reset = () => {
-    setName(''); setClientId(''); setRef(''); setRefEdited(false)
+    setName(''); setClientId(null); setRef(''); setRefEdited(false)
     setShowNewClient(false); setNewClientName(''); setNewClientCompany(''); setNewClientEmail('')
   }
 
@@ -198,7 +201,14 @@ export function ProjectsPage() {
   const [params, setParams] = useSearchParams()
   const search = params.get('q') ?? ''
   const statusFilter = (params.get('status') as ProjectStatus | 'all') ?? 'all'
-  const [showNew, setShowNew] = useState(false)
+  // Driven by the URL so "New project" can be linked to from anywhere in the app.
+  const showNew = params.get('new') === '1'
+  const setShowNew = (open: boolean) => setParams(prev => {
+    const next = new URLSearchParams(prev)
+    if (open) next.set('new', '1')
+    else { next.delete('new'); next.delete('client') }
+    return next
+  }, { replace: true })
   const [statusMenuId, setStatusMenuId] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
 
@@ -232,8 +242,7 @@ export function ProjectsPage() {
       // name and the number just reserved.
       const projectNumber = customReference || autoRef(project.name, reserved)
       const created = await createProject.mutateAsync({ ...project, project_number: projectNumber })
-      setShowNew(false)
-      navigate(`/projects/${created.id}`)
+      navigate(`/projects/${created.id}`, { replace: true })
     } catch (e) {
       toast(errorMessage(e, 'Failed to create project'), 'error')
     }
@@ -474,6 +483,7 @@ export function ProjectsPage() {
         onClose={() => setShowNew(false)}
         onCreate={handleCreate}
         creating={createProject.isPending}
+        initialClientId={params.get('client') ?? ''}
       />
     </div>
   )

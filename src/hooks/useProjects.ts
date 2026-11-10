@@ -160,11 +160,12 @@ export function useSaveLineItems() {
         if (error) throw error
       }
     },
-    onSuccess: (_, vars) => {
-      qc.invalidateQueries({ queryKey: ['projects', vars.projectId] })
-      qc.invalidateQueries({ queryKey: ['projects'] })
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['booked-qty'] })
       qc.invalidateQueries({ queryKey: ['conflicts'] })
+      // Returned so the mutation only resolves once the project has been refetched;
+      // otherwise the page briefly falls back to the pre-save kit list.
+      return qc.invalidateQueries({ queryKey: ['projects'] })
     },
   })
 }

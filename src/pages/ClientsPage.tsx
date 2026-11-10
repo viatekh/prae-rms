@@ -98,7 +98,14 @@ export function ClientsPage() {
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Client | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<Client | null>(null)
-  const [viewingHistory, setViewingHistory] = useState<Client | null>(null)
+  // In the URL so search results and project pages can link straight to a client.
+  const viewingHistory = clients.find(c => c.id === params.get('client')) ?? null
+  const setViewingHistory = (client: Client | null) => setParams(prev => {
+    const next = new URLSearchParams(prev)
+    if (client) next.set('client', client.id)
+    else next.delete('client')
+    return next
+  }, { replace: true })
   const toast = useToast()
 
   const filtered = clients.filter(c =>
@@ -130,7 +137,7 @@ export function ClientsPage() {
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           {filtered.map((client, idx) => (
             <div key={client.id} className={`flex items-center gap-4 px-4 py-3 hover:bg-gray-50 ${idx > 0 ? 'border-t border-gray-100' : ''}`}>
-              <div className="flex-1 min-w-0">
+              <button type="button" onClick={() => setViewingHistory(client)} className="flex-1 min-w-0 text-left cursor-pointer">
                 <div className="flex items-center gap-2">
                   <p className="font-medium text-gray-900">{client.name}</p>
                   {client.default_discount_pct ? (
@@ -138,15 +145,15 @@ export function ClientsPage() {
                   ) : null}
                 </div>
                 {client.company && <p className="text-sm text-gray-500">{client.company}</p>}
-              </div>
-              <div className="flex items-center gap-4 text-sm text-gray-500">
+              </button>
+              <div className="hidden sm:flex items-center gap-4 text-sm text-gray-500">
                 {client.email && <a href={`mailto:${client.email}`} className="flex items-center gap-1 hover:text-gray-900"><Mail size={13} />{client.email}</a>}
                 {client.phone && <span className="flex items-center gap-1"><Phone size={13} />{client.phone}</span>}
               </div>
               <div className="flex gap-1">
                 <Button variant="ghost" size="sm" onClick={() => setViewingHistory(client)} title="View project history"><History size={14} /></Button>
-                <Button variant="ghost" size="sm" onClick={() => setEditing(client)}><Pencil size={14} /></Button>
-                <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(client)}><Trash2 size={14} /></Button>
+                <Button variant="ghost" size="sm" onClick={() => setEditing(client)} title="Edit client" aria-label={`Edit ${client.name}`}><Pencil size={14} /></Button>
+                <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(client)} title="Delete client" aria-label={`Delete ${client.name}`}><Trash2 size={14} /></Button>
               </div>
             </div>
           ))}
@@ -183,7 +190,7 @@ export function ClientsPage() {
 
       {/* Client history */}
       <Modal open={!!viewingHistory} onClose={() => setViewingHistory(null)}
-        title={`${viewingHistory?.name} — project history`} size="lg">
+        title={viewingHistory ? `${viewingHistory.name}${viewingHistory.company ? ` · ${viewingHistory.company}` : ''}` : ''} size="lg">
         {viewingHistory && (() => {
           const clientProjects = allProjects
             .filter(p => p.client_id === viewingHistory.id)
@@ -193,6 +200,13 @@ export function ClientsPage() {
             .reduce((s, p) => s + calcProjectTotals(p.line_items ?? [], p.overall_discount_pct ?? 0).subtotal, 0)
           return (
             <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-500 mb-3">
+                {viewingHistory.email && <a href={`mailto:${viewingHistory.email}`} className="flex items-center gap-1 hover:text-gray-900"><Mail size={13} />{viewingHistory.email}</a>}
+                {viewingHistory.phone && <a href={`tel:${viewingHistory.phone}`} className="flex items-center gap-1 hover:text-gray-900"><Phone size={13} />{viewingHistory.phone}</a>}
+                <span className="flex-1" />
+                <Button variant="secondary" size="sm" onClick={() => { const c = viewingHistory; setViewingHistory(null); setEditing(c) }}><Pencil size={13} />Edit</Button>
+                <Button size="sm" onClick={() => navigate(`/projects?new=1&client=${viewingHistory.id}`)}><Plus size={14} />New project</Button>
+              </div>
               {totalSpend > 0 && (
                 <div className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-lg mb-3">
                   <span className="text-sm text-gray-600">Total spend (confirmed+)</span>
@@ -203,7 +217,7 @@ export function ClientsPage() {
                 <p className="text-sm text-gray-400 text-center py-8">No projects yet for this client</p>
               )}
               {clientProjects.map(p => (
-                <button key={p.id} onClick={() => { setViewingHistory(null); navigate(`/projects/${p.id}`) }}
+                <button key={p.id} onClick={() => navigate(`/projects/${p.id}`)}
                   className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-left">
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-sm text-gray-900 truncate">{p.name}</p>

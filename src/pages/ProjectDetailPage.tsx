@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { ArrowLeft, Plus, Trash2, Copy, FileText, ClipboardList, Send, LogIn, LogOut, AlertCircle, MoreVertical, Users, MessageSquare, Truck } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, Copy, FileText, ClipboardList, Send, LogIn, LogOut, AlertCircle, MoreVertical, Users, MessageSquare, Truck, Check, Loader2 } from 'lucide-react'
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges'
 import { errorMessage } from '../lib/errors'
 import { format, addDays, isPast, parseISO } from 'date-fns'
@@ -22,27 +22,21 @@ import { formatCurrency, calcLineTotal, calcProjectTotals, lineRateBasis } from 
 import { generateQuotePDF, generatePickingListPDF, generateDeliveryDocketPDF } from '../lib/pdf-lazy'
 import { useToast } from '../lib/toast-context'
 import { Select } from '../components/shared/Select'
-
-const STATUSES: ProjectStatus[] = ['draft', 'sent', 'confirmed', 'invoiced', 'completed']
-
-const STATUS_SELECT_STYLES: Record<ProjectStatus, string> = {
-  draft:     'border-gray-300 bg-white text-gray-600',
-  sent:      'border-blue-300 bg-blue-50 text-blue-800',
-  confirmed: 'border-green-300 bg-green-50 text-green-800',
-  invoiced:  'border-yellow-300 bg-yellow-50 text-yellow-800',
-  completed: 'border-purple-300 bg-purple-50 text-purple-800',
-}
+import { ProjectWorkflow } from '../components/projects/ProjectWorkflow'
+import { QuickAddItem } from '../components/projects/QuickAddItem'
+import { defaultHireDays } from '../lib/workflow'
+import type { WorkflowAction } from '../lib/workflow'
 
 type LineItemDraft = Omit<ProjectLineItem, 'id' | 'item' | 'package' | 'children'>
 
 // ─── Left panel: project details + dates + notes ─────────────────────────────
 
 const AUTOSAVE_DELAY_MS = 1200
+const KIT_AUTOSAVE_DELAY_MS = 1500
 
-function ProjectDetailsPanel({ project, clients, onStatusChange, onSave, onRefreshClients }: {
+function ProjectDetailsPanel({ project, clients, onSave, onRefreshClients }: {
   project: Project
   clients: Client[]
-  onStatusChange: (s: ProjectStatus) => void
   onSave: (updates: Partial<Project>) => Promise<void>
   onRefreshClients: () => void
 }) {
@@ -52,8 +46,6 @@ function ProjectDetailsPanel({ project, clients, onStatusChange, onSave, onRefre
   const [newClientName, setNewClientName] = useState('')
   const [newClientCompany, setNewClientCompany] = useState('')
   const [newClientEmail, setNewClientEmail] = useState('')
-  const [checkingOut, setCheckingOut] = useState(false)
-  const [checkingIn, setCheckingIn] = useState(false)
 
   const [form, setForm] = useState({
     client_id: project.client_id || '',
@@ -166,15 +158,6 @@ function ProjectDetailsPanel({ project, clients, onStatusChange, onSave, onRefre
             <span className="text-xs text-amber-600">Unsaved…</span>
           )}
         </div>
-
-        <Select
-          label="Status"
-          className={`font-medium ${STATUS_SELECT_STYLES[project.status] || ''}`}
-          value={project.status}
-          onChange={e => onStatusChange(e.target.value as ProjectStatus)}
-        >
-          {STATUSES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-        </Select>
 
         <div>
           <div className="flex gap-1.5 items-end">
@@ -340,52 +323,28 @@ function ProjectDetailsPanel({ project, clients, onStatusChange, onSave, onRefre
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
         <h2 className="text-sm font-semibold text-gray-700">Operations</h2>
         <div className="space-y-2">
-          {project.check_out_at ? (
+          {project.check_out_at && (
             <div className="flex items-center justify-between bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
               <div>
                 <p className="text-xs font-medium text-orange-800 flex items-center gap-1"><LogOut size={12} />Kit checked out</p>
                 <p className="text-xs text-orange-600">{new Date(project.check_out_at).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })}</p>
               </div>
-              <button className="text-xs text-orange-400 hover:text-orange-700 underline" onClick={async () => {
-                setCheckingOut(true)
-                try { await onSave({ check_out_at: null }) } finally { setCheckingOut(false) }
-              }}>Clear</button>
+              <button type="button" className="text-xs text-orange-500 hover:text-orange-700 underline cursor-pointer"
+                onClick={() => { void onSave({ check_out_at: null }).catch(() => {}) }}>Undo</button>
             </div>
-          ) : (
-            <button
-              disabled={checkingOut}
-              onClick={async () => {
-                setCheckingOut(true)
-                try { await onSave({ check_out_at: new Date().toISOString() }) } finally { setCheckingOut(false) }
-              }}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium border border-gray-300 rounded-lg hover:bg-orange-50 hover:border-orange-300 hover:text-orange-700 transition-colors disabled:opacity-50"
-            >
-              <LogOut size={14} />Record check out
-            </button>
           )}
-
-          {project.check_in_at ? (
+          {project.check_in_at && (
             <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-lg px-3 py-2">
               <div>
                 <p className="text-xs font-medium text-green-800 flex items-center gap-1"><LogIn size={12} />Kit checked in</p>
                 <p className="text-xs text-green-600">{new Date(project.check_in_at).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })}</p>
               </div>
-              <button className="text-xs text-green-400 hover:text-green-700 underline" onClick={async () => {
-                setCheckingIn(true)
-                try { await onSave({ check_in_at: null }) } finally { setCheckingIn(false) }
-              }}>Clear</button>
+              <button type="button" className="text-xs text-green-500 hover:text-green-700 underline cursor-pointer"
+                onClick={() => { void onSave({ check_in_at: null }).catch(() => {}) }}>Undo</button>
             </div>
-          ) : (
-            <button
-              disabled={checkingIn}
-              onClick={async () => {
-                setCheckingIn(true)
-                try { await onSave({ check_in_at: new Date().toISOString() }) } finally { setCheckingIn(false) }
-              }}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium border border-gray-300 rounded-lg hover:bg-green-50 hover:border-green-300 hover:text-green-700 transition-colors disabled:opacity-50"
-            >
-              <LogIn size={14} />Record check in
-            </button>
+          )}
+          {!project.check_out_at && !project.check_in_at && (
+            <p className="text-xs text-gray-400">Check-out and check-in are recorded from the progress bar at the top.</p>
           )}
         </div>
         <Textarea label="Damage / loss notes" value={form.damage_notes} onChange={e => set('damage_notes', e.target.value)} rows={2} placeholder="Post-hire damage or missing items" />
@@ -419,6 +378,10 @@ export function ProjectDetailPage() {
   const [showAddService, setShowAddService] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [advancing, setAdvancing] = useState(false)
+  const [justSaved, setJustSaved] = useState(false)
+  // The snapshot whose save failed; autosave waits for a further edit (or Retry).
+  const [failedLines, setFailedLines] = useState<LineItemDraft[] | null>(null)
   const [mobileTab, setMobileTab] = useState<'details' | 'kit'>('kit')
   const [showOverflow, setShowOverflow] = useState(false)
 
@@ -622,17 +585,48 @@ export function ProjectDetailPage() {
     setShowAddService(false)
   }
 
-  const saveLines = async () => {
-    if (!localLines) return
+  const { mutateAsync: persistLines } = saveLineItems
+
+  // Saves one snapshot. Edits made while the request is in flight are kept:
+  // local state is only cleared if it is still the snapshot that was written.
+  const saveLines = useCallback(async (snapshot: LineItemDraft[]): Promise<boolean> => {
     setSaving(true)
+    setFailedLines(null)
     try {
-      await saveLineItems.mutateAsync({ projectId: id!, lineItems: localLines })
-      setLocalLines(null)
-      toast('Kit list saved')
+      await persistLines({ projectId: id!, lineItems: snapshot })
+      setLocalLines(cur => (cur === snapshot ? null : cur))
+      setJustSaved(true)
+      return true
     } catch (e) {
+      setFailedLines(snapshot)
       toast(errorMessage(e, 'Failed to save kit list'), 'error')
+      return false
     } finally {
       setSaving(false)
+    }
+  }, [id, persistLines, toast])
+
+  // Kit list autosaves like the details panel does — one save model per screen.
+  useEffect(() => {
+    if (!localLines || saving || localLines === failedLines) return
+    const timer = setTimeout(() => { void saveLines(localLines) }, KIT_AUTOSAVE_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [localLines, saving, failedLines, saveLines])
+
+  useEffect(() => {
+    if (!justSaved) return
+    const timer = setTimeout(() => setJustSaved(false), 2000)
+    return () => clearTimeout(timer)
+  }, [justSaved])
+
+  const handleAdvance = async (action: WorkflowAction) => {
+    setAdvancing(true)
+    try {
+      await updateProject.mutateAsync({ id: id!, ...action.updates })
+    } catch (e) {
+      toast(errorMessage(e, 'Failed to update project'), 'error')
+    } finally {
+      setAdvancing(false)
     }
   }
 
@@ -692,7 +686,7 @@ export function ProjectDetailPage() {
   }
 
   const detailsPanel = (
-    <ProjectDetailsPanel project={project} clients={clients} onStatusChange={handleStatusChange} onRefreshClients={() => refetchClients()} onSave={async updates => {
+    <ProjectDetailsPanel project={project} clients={clients} onRefreshClients={() => refetchClients()} onSave={async updates => {
       try {
         await updateProject.mutateAsync({ id: id!, ...updates })
         toast('Details saved')
@@ -703,17 +697,26 @@ export function ProjectDetailPage() {
     }} />
   )
 
-  const overflowActions = [
-    { label: 'Picking list', icon: ClipboardList, action: () => generatePickingListPDF(project, lines, settings, allItems) },
-    { label: 'Quote PDF', icon: FileText, action: () => generateQuotePDF(project, lines, settings) },
+  const emailQuote = () => {
+    const subject = encodeURIComponent(`Quotation ${project.project_number} — ${project.name}`)
+    const body = encodeURIComponent(`Dear ${project.client!.name},\n\nPlease find attached your quotation ${project.project_number} for ${project.name}.\n\nKind regards`)
+    window.location.href = `mailto:${project.client!.email}?subject=${subject}&body=${body}`
+  }
+
+  const overflowActions: { label: string; icon: typeof FileText; action: () => void; danger?: boolean; inlineOnDesktop?: boolean }[] = [
+    { label: 'Quote PDF', icon: FileText, action: () => generateQuotePDF(project, lines, settings), inlineOnDesktop: true },
+    { label: 'Picking list', icon: ClipboardList, action: () => generatePickingListPDF(project, lines, settings, allItems), inlineOnDesktop: true },
     { label: 'Delivery docket', icon: Truck, action: () => generateDeliveryDocketPDF(project, lines, settings) },
-    ...(project.client?.email ? [{ label: 'Send quote', icon: Send, action: () => {
-      const subject = encodeURIComponent(`Quotation ${project.project_number} — ${project.name}`)
-      const body = encodeURIComponent(`Dear ${project.client!.name},\n\nPlease find attached your quotation ${project.project_number} for ${project.name}.\n\nKind regards`)
-      window.location.href = `mailto:${project.client!.email}?subject=${subject}&body=${body}`
-    }}] : []),
+    ...(project.client?.email ? [{ label: 'Email quote to client', icon: Send, action: emailQuote }] : []),
     { label: 'Delete project', icon: Trash2, action: () => setConfirmDelete(true), danger: true },
   ]
+
+  const hireDays = defaultHireDays(project.event_date, project.collection_date)
+  const goBack = () => {
+    // idx > 0 means there is an in-app page to return to; otherwise fall back to the list.
+    if ((window.history.state?.idx ?? 0) > 0) navigate(-1)
+    else navigate('/projects')
+  }
 
   return (
     <div className="p-3 md:p-6 max-w-5xl">
@@ -727,7 +730,9 @@ export function ProjectDetailPage() {
       {/* Header */}
       <div className="flex items-start justify-between mb-4 md:mb-6">
         <div className="flex items-center gap-2 md:gap-3 min-w-0">
-          <Link to="/projects" className="text-gray-400 hover:text-gray-600 shrink-0"><ArrowLeft size={20} /></Link>
+          {/* Go back to wherever the user came from (filtered list, calendar, dashboard). */}
+          <button type="button" aria-label="Back" onClick={goBack}
+            className="text-gray-400 hover:text-gray-600 shrink-0 cursor-pointer"><ArrowLeft size={20} /></button>
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               {editingName ? (
@@ -748,51 +753,53 @@ export function ProjectDetailPage() {
               )}
               <StatusBadge status={project.status} />
             </div>
-            <p className="text-xs md:text-sm text-gray-500 mt-0.5">{project.project_number}</p>
+            <p className="text-xs md:text-sm text-gray-500 mt-0.5 truncate">
+              {project.project_number}
+              {project.client && (
+                <>
+                  {' · '}
+                  <Link to={`/clients?client=${project.client.id}`} className="hover:text-gray-900 hover:underline">
+                    {project.client.name}
+                  </Link>
+                </>
+              )}
+            </p>
           </div>
         </div>
 
-        {/* Desktop action buttons */}
-        <div className="hidden md:flex gap-2 shrink-0">
-          <Button variant="secondary" size="sm" onClick={() => generatePickingListPDF(project, lines, settings, allItems)}>
-            <ClipboardList size={15} />Picking list
-          </Button>
-          <Button variant="secondary" size="sm" onClick={() => generateQuotePDF(project, lines, settings)}>
+        {/* Actions: the two everyday documents inline on desktop, everything else in one menu */}
+        <div className="flex items-center gap-2 shrink-0">
+          <Button variant="secondary" size="sm" className="hidden md:inline-flex" onClick={() => generateQuotePDF(project, lines, settings)}>
             <FileText size={15} />Quote PDF
           </Button>
-          {project.client?.email && (
-            <Button variant="secondary" size="sm" onClick={() => {
-              const subject = encodeURIComponent(`Quotation ${project.project_number} — ${project.name}`)
-              const body = encodeURIComponent(`Dear ${project.client!.name},\n\nPlease find attached your quotation ${project.project_number} for ${project.name}.\n\nKind regards`)
-              window.location.href = `mailto:${project.client!.email}?subject=${subject}&body=${body}`
-            }}>
-              <Send size={14} />Send quote
-            </Button>
-          )}
-          <Button variant="danger" size="sm" onClick={() => setConfirmDelete(true)}><Trash2 size={14} />Delete</Button>
-        </div>
-
-        {/* Mobile overflow menu */}
-        <div className="md:hidden relative shrink-0">
-          <button onClick={() => setShowOverflow(v => !v)}
-            className="p-2 rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50">
-            <MoreVertical size={18} />
-          </button>
-          {showOverflow && (
-            <>
-              <div className="fixed inset-0 z-10" onClick={() => setShowOverflow(false)} />
-              <div className="absolute right-0 top-full mt-1 w-48 bg-white border border-gray-200 rounded-xl shadow-lg z-20 overflow-hidden">
-                {overflowActions.map(({ label, icon: Icon, action, danger }) => (
-                  <button key={label} onClick={() => { action(); setShowOverflow(false) }}
-                    className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-left hover:bg-gray-50 ${danger ? 'text-red-600' : 'text-gray-700'}`}>
-                    <Icon size={14} className="shrink-0" />{label}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
+          <Button variant="secondary" size="sm" className="hidden md:inline-flex" onClick={() => generatePickingListPDF(project, lines, settings, allItems)}>
+            <ClipboardList size={15} />Picking list
+          </Button>
+          <div className="relative">
+            <button type="button" onClick={() => setShowOverflow(v => !v)}
+              aria-label="More actions" aria-haspopup="menu" aria-expanded={showOverflow}
+              className="p-2 md:p-1.5 rounded-lg border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 cursor-pointer">
+              <MoreVertical size={18} />
+            </button>
+            {showOverflow && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowOverflow(false)} />
+                <div role="menu" className="absolute right-0 top-full mt-1 w-52 bg-white border border-gray-200 rounded-xl shadow-lg z-20 overflow-hidden">
+                  {overflowActions.map(({ label, icon: Icon, action, danger, inlineOnDesktop }) => (
+                    <button key={label} role="menuitem" onClick={() => { action(); setShowOverflow(false) }}
+                      className={`w-full items-center gap-2.5 px-4 py-2.5 text-sm text-left hover:bg-gray-50 cursor-pointer ${inlineOnDesktop ? 'flex md:hidden' : 'flex'} ${danger ? 'text-red-600 border-t border-gray-100' : 'text-gray-700'}`}>
+                      <Icon size={14} className="shrink-0" />{label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
+
+      <ProjectWorkflow project={project} busy={advancing || updateProject.isPending}
+        onAdvance={handleAdvance} onStatusChange={handleStatusChange} />
 
       {/* Mobile tab switcher */}
       <div className="md:hidden flex gap-1 mb-4 bg-gray-100 p-1 rounded-lg">
@@ -817,31 +824,37 @@ export function ProjectDetailPage() {
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-semibold text-gray-700">Kit list</h2>
-                {hasUnsavedLines && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
-                    Unsaved changes
-                  </span>
-                )}
+                <span className="text-xs" aria-live="polite">
+                  {saving ? (
+                    <span className="inline-flex items-center gap-1 text-gray-400"><Loader2 size={12} className="animate-spin" />Saving…</span>
+                  ) : failedLines && localLines === failedLines ? (
+                    <span className="text-red-600">Not saved</span>
+                  ) : hasUnsavedLines ? (
+                    <span className="text-amber-600">Unsaved…</span>
+                  ) : justSaved ? (
+                    <span className="inline-flex items-center gap-1 text-green-600"><Check size={12} />Saved</span>
+                  ) : null}
+                </span>
               </div>
               <div className="flex gap-1.5 flex-wrap justify-end">
-                {hasUnsavedLines && (
-                  <>
-                    <Button variant="ghost" size="sm" onClick={() => setLocalLines(null)} disabled={saving}>
-                      Discard
-                    </Button>
-                    <Button size="sm" onClick={saveLines} disabled={saving}>
-                      {saving ? 'Saving…' : 'Save kit list'}
-                    </Button>
-                  </>
+                {failedLines && localLines === failedLines && (
+                  <Button size="sm" onClick={() => saveLines(failedLines)} disabled={saving}>Retry save</Button>
                 )}
                 <Button variant="ghost" size="sm" onClick={() => setShowAddService(true)}><Plus size={14} /><span className="hidden sm:inline">Service / crew</span><span className="sm:hidden">Service</span></Button>
-                <Button variant="secondary" size="sm" onClick={() => setShowAddItem(true)}><Plus size={14} />Add item</Button>
+                <Button variant="secondary" size="sm" onClick={() => setShowAddItem(true)}><Plus size={14} />Browse items</Button>
               </div>
             </div>
 
+            <QuickAddItem
+              items={allItems}
+              availability={availabilityMap}
+              showAvailability={!!(project.event_date || project.collection_date)}
+              onAdd={item => addItem(item, 1, hireDays)}
+            />
+
             {lines.length === 0 ? (
               <div className="text-center py-12 text-gray-400">
-                <p className="text-sm">No items yet — add from inventory or add a service</p>
+                <p className="text-sm">No items yet — type in the box above to add kit, or add a service</p>
               </div>
             ) : (
               <div>
@@ -1049,12 +1062,18 @@ export function ProjectDetailPage() {
       <Modal open={unsaved.isBlocked} onClose={unsaved.stay} title="Unsaved kit list" size="sm" closeOnBackdrop={false}>
         <div className="space-y-4">
           <p className="text-sm text-gray-700">
-            You have unsaved changes to this kit list. Leaving now discards them.
+            The latest kit list changes haven't been saved yet.
           </p>
           <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={unsaved.stay}>Keep editing</Button>
-            <Button variant="danger" onClick={() => { setLocalLines(null); unsaved.discard() }}>
-              Discard changes
+            <Button variant="ghost" onClick={unsaved.stay}>Keep editing</Button>
+            <Button variant="secondary" onClick={() => { setLocalLines(null); unsaved.discard() }}>
+              Discard
+            </Button>
+            <Button disabled={saving} onClick={async () => {
+              if (!localLines || await saveLines(localLines)) unsaved.discard()
+              else unsaved.stay()
+            }}>
+              {saving ? 'Saving…' : 'Save and leave'}
             </Button>
           </div>
         </div>
@@ -1079,9 +1098,7 @@ function AddItemModal({ open, onClose, items, packages, onAddItems, onAddPackage
   const [pkgQty, setPkgQty] = useState(1)
   const [pkgDays, setPkgDays] = useState(1)
 
-  const defaultDays = eventDate && collectionDate
-    ? Math.max(1, Math.ceil((new Date(collectionDate).getTime() - new Date(eventDate).getTime()) / 86400000))
-    : 1
+  const defaultDays = defaultHireDays(eventDate, collectionDate)
 
   const filteredItems = items.filter(i =>
     !i.out_of_service &&

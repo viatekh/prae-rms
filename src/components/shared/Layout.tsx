@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   Users, FolderKanban, Calendar, Settings, Boxes, LogOut, Shield, Menu, X, Search,
-  LayoutDashboard, BarChart2,
+  LayoutDashboard, BarChart2, Plus, MoreHorizontal,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { useAuth } from '../../lib/auth-context'
@@ -77,8 +77,8 @@ function GlobalSearch({ onNavigated }: { onNavigated?: () => void }) {
         .slice(0, 3)
         .map<SearchResult>(c => ({
           key: `client-${c.id}`, type: 'Client', label: c.name, sub: c.company || '',
-          // Deep-link so the destination list opens filtered to the hit.
-          to: `/clients?q=${encodeURIComponent(c.name)}`,
+          // Deep-link straight to the client's record.
+          to: `/clients?client=${c.id}`,
         })),
       ...items
         .filter(i => i.name.toLowerCase().includes(q) || i.item_id.toLowerCase().includes(q))
@@ -119,7 +119,7 @@ function GlobalSearch({ onNavigated }: { onNavigated?: () => void }) {
           onChange={e => { setQuery(e.target.value); setOpen(true); setActiveIndex(0) }}
           onFocus={() => setOpen(true)}
           onKeyDown={onKeyDown}
-          placeholder="Search…"
+          placeholder="Search…  ⌘K"
           aria-label="Search projects, clients and items"
           role="combobox"
           aria-expanded={showList}
@@ -168,6 +168,8 @@ interface NavItem {
   icon: typeof LayoutDashboard
   label: string
   adminOnly?: boolean
+  /** Starts the "Admin" group in the sidebar. */
+  group?: 'admin'
 }
 
 const NAV: NavItem[] = [
@@ -177,8 +179,8 @@ const NAV: NavItem[] = [
   { to: '/clients',   icon: Users,           label: 'Clients' },
   { to: '/calendar',  icon: Calendar,        label: 'Calendar' },
   { to: '/reports',   icon: BarChart2,       label: 'Reports' },
-  { to: '/users',     icon: Shield,          label: 'Users', adminOnly: true },
-  { to: '/settings',  icon: Settings,        label: 'Settings' },
+  { to: '/settings',  icon: Settings,        label: 'Settings', group: 'admin' },
+  { to: '/users',     icon: Shield,          label: 'Users', adminOnly: true, group: 'admin' },
 ]
 
 // Bottom nav shows only the 4 most-used destinations on mobile
@@ -219,15 +221,25 @@ function SidebarContent({ onNavigate, onSignOut, profile, showUsers }: {
       </div>
 
       <nav aria-label="Main" className="flex-1 p-3 space-y-0.5 overflow-y-auto">
-        {nav.map(({ to, icon: Icon, label }) => (
-          <NavLink key={to} to={to} end={to === '/'}
-            onClick={onNavigate}
-            className={({ isActive }) => cn(
-              'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors',
-              isActive ? 'bg-white text-gray-900 font-medium' : 'text-gray-300 hover:bg-white/10'
-            )}>
-            <Icon size={16} />{label}
-          </NavLink>
+        {/* The most common starting point, reachable from every page. */}
+        <Link to="/projects?new=1" onClick={onNavigate}
+          className="flex items-center justify-center gap-2 px-3 py-2 mb-3 rounded-lg text-sm font-medium bg-white/10 border border-white/15 text-white hover:bg-white/20 transition-colors">
+          <Plus size={15} />New project
+        </Link>
+        {nav.map(({ to, icon: Icon, label, group }, i) => (
+          <div key={to}>
+            {group && nav[i - 1]?.group !== group && (
+              <p className="px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-500">Admin</p>
+            )}
+            <NavLink to={to} end={to === '/'}
+              onClick={onNavigate}
+              className={({ isActive }) => cn(
+                'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors',
+                isActive ? 'bg-white text-gray-900 font-medium' : 'text-gray-300 hover:bg-white/10'
+              )}>
+              <Icon size={16} />{label}
+            </NavLink>
+          </div>
         ))}
       </nav>
 
@@ -334,6 +346,12 @@ export function Layout() {
               <span>{label}</span>
             </NavLink>
           ))}
+          {/* Clients, Reports and Settings live in the drawer; this makes that discoverable. */}
+          <button type="button" onClick={() => setDrawerOpen(true)}
+            className="flex-1 flex flex-col items-center gap-0.5 py-2 text-xs text-gray-400 cursor-pointer">
+            <MoreHorizontal size={20} />
+            <span>More</span>
+          </button>
         </nav>
       </div>
     </div>
